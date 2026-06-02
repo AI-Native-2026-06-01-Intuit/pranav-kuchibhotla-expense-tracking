@@ -1,23 +1,27 @@
 package com.uptimecrew.expense.service;
 
+import java.util.Locale;
+import java.util.Objects;
+
 import com.uptimecrew.expense.model.Transaction;
 import com.uptimecrew.expense.model.TransactionKind;
 
-import java.util.Objects;
-
 public final class MerchantNameClassifier implements TransactionClassifier {
-
-    private static final String[] DEDUCTIBLE_KEYWORDS = {"office", "staples", "depot", "uber"};
 
     @Override
     public TransactionKind classify(Transaction transaction) {
-        Objects.requireNonNull(transaction, "transaction");
-        String merchant = transaction.merchantName().toLowerCase();
-        for (String keyword : DEDUCTIBLE_KEYWORDS) {
-            if (merchant.contains(keyword)) {
-                return TransactionKind.DEDUCTIBLE;
-            }
+        Objects.requireNonNull(transaction, "transaction must not be null");
+
+        String merchantName = transaction.merchantName().toLowerCase(Locale.ROOT);
+
+        if (merchantName.contains("office")
+                || merchantName.contains("depot")
+                || merchantName.contains("staples")
+                || merchantName.contains("adobe")
+                || merchantName.contains("github")) {
+            return TransactionKind.DEDUCTIBLE;
         }
-        return TransactionKind.PERSONAL;
+
+        return TransactionKind.NON_DEDUCTIBLE;
     }
 }

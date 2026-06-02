@@ -11,21 +11,25 @@ public final class ExpenseCategory {
     private final BigDecimal deductiblePercent;
 
     public ExpenseCategory(String id, String name, BigDecimal deductiblePercent) {
-        Objects.requireNonNull(id, "id");
-        Objects.requireNonNull(name, "name");
-        Objects.requireNonNull(deductiblePercent, "deductiblePercent");
-        if (id.isBlank()) {
-            throw new IllegalArgumentException("id must not be blank");
+        this.id = requireNonBlank(id, "id");
+        this.name = requireNonBlank(name, "name");
+        this.deductiblePercent = normalizePercent(deductiblePercent);
+    }
+
+    private static String requireNonBlank(String value, String fieldName) {
+        Objects.requireNonNull(value, fieldName + " must not be null");
+        if (value.isBlank()) {
+            throw new IllegalArgumentException(fieldName + " must be non-blank");
         }
-        if (name.isBlank()) {
-            throw new IllegalArgumentException("name must not be blank");
+        return value;
+    }
+
+    private static BigDecimal normalizePercent(BigDecimal value) {
+        Objects.requireNonNull(value, "deductiblePercent must not be null");
+        if (value.signum() < 0 || value.compareTo(new BigDecimal("100.00")) > 0) {
+            throw new IllegalArgumentException("deductiblePercent must be between 0 and 100");
         }
-        if (deductiblePercent.signum() < 0) {
-            throw new IllegalArgumentException("deductiblePercent must not be negative");
-        }
-        this.id = id;
-        this.name = name;
-        this.deductiblePercent = deductiblePercent.setScale(2, RoundingMode.HALF_UP);
+        return value.setScale(2, RoundingMode.HALF_UP);
     }
 
     public String id() {
@@ -41,12 +45,16 @@ public final class ExpenseCategory {
     }
 
     @Override
-    public boolean equals(Object o) {
-        if (this == o) return true;
-        if (!(o instanceof ExpenseCategory other)) return false;
-        return id.equals(other.id)
-                && name.equals(other.name)
-                && deductiblePercent.equals(other.deductiblePercent);
+    public boolean equals(Object other) {
+        if (this == other) {
+            return true;
+        }
+        if (!(other instanceof ExpenseCategory that)) {
+            return false;
+        }
+        return id.equals(that.id)
+                && name.equals(that.name)
+                && deductiblePercent.equals(that.deductiblePercent);
     }
 
     @Override
@@ -56,8 +64,9 @@ public final class ExpenseCategory {
 
     @Override
     public String toString() {
-        return "ExpenseCategory{id=" + id
-                + ", name=" + name
+        return "ExpenseCategory{"
+                + "id='" + id + '\''
+                + ", name='" + name + '\''
                 + ", deductiblePercent=" + deductiblePercent
                 + '}';
     }

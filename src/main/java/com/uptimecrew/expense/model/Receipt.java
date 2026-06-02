@@ -11,23 +11,18 @@ public final class Receipt {
     private final Instant capturedAt;
 
     public Receipt(String id, String transactionId, String imageRef, Instant capturedAt) {
-        Objects.requireNonNull(id, "id");
-        Objects.requireNonNull(transactionId, "transactionId");
-        Objects.requireNonNull(imageRef, "imageRef");
-        Objects.requireNonNull(capturedAt, "capturedAt");
-        if (id.isBlank()) {
-            throw new IllegalArgumentException("id must not be blank");
+        this.id = requireNonBlank(id, "id");
+        this.transactionId = requireNonBlank(transactionId, "transactionId");
+        this.imageRef = requireNonBlank(imageRef, "imageRef");
+        this.capturedAt = Objects.requireNonNull(capturedAt, "capturedAt must not be null");
+    }
+
+    private static String requireNonBlank(String value, String fieldName) {
+        Objects.requireNonNull(value, fieldName + " must not be null");
+        if (value.isBlank()) {
+            throw new IllegalArgumentException(fieldName + " must be non-blank");
         }
-        if (transactionId.isBlank()) {
-            throw new IllegalArgumentException("transactionId must not be blank");
-        }
-        if (imageRef.isBlank()) {
-            throw new IllegalArgumentException("imageRef must not be blank");
-        }
-        this.id = id;
-        this.transactionId = transactionId;
-        this.imageRef = imageRef;
-        this.capturedAt = capturedAt;
+        return value;
     }
 
     public String id() {
@@ -47,13 +42,17 @@ public final class Receipt {
     }
 
     @Override
-    public boolean equals(Object o) {
-        if (this == o) return true;
-        if (!(o instanceof Receipt other)) return false;
-        return id.equals(other.id)
-                && transactionId.equals(other.transactionId)
-                && imageRef.equals(other.imageRef)
-                && capturedAt.equals(other.capturedAt);
+    public boolean equals(Object other) {
+        if (this == other) {
+            return true;
+        }
+        if (!(other instanceof Receipt that)) {
+            return false;
+        }
+        return id.equals(that.id)
+                && transactionId.equals(that.transactionId)
+                && imageRef.equals(that.imageRef)
+                && capturedAt.equals(that.capturedAt);
     }
 
     @Override
@@ -63,9 +62,10 @@ public final class Receipt {
 
     @Override
     public String toString() {
-        return "Receipt{id=" + id
-                + ", transactionId=" + transactionId
-                + ", imageRef=" + imageRef
+        return "Receipt{"
+                + "id='" + id + '\''
+                + ", transactionId='" + transactionId + '\''
+                + ", imageRef='" + imageRef + '\''
                 + ", capturedAt=" + capturedAt
                 + '}';
     }

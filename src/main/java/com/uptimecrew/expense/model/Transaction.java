@@ -13,29 +13,34 @@ public final class Transaction {
     private final String merchantName;
     private final LocalDate occurredOn;
 
-    public Transaction(String id, String accountId, BigDecimal amount, String merchantName, LocalDate occurredOn) {
-        Objects.requireNonNull(id, "id");
-        Objects.requireNonNull(accountId, "accountId");
-        Objects.requireNonNull(amount, "amount");
-        Objects.requireNonNull(merchantName, "merchantName");
-        Objects.requireNonNull(occurredOn, "occurredOn");
-        if (id.isBlank()) {
-            throw new IllegalArgumentException("id must not be blank");
+    public Transaction(
+            String id,
+            String accountId,
+            BigDecimal amount,
+            String merchantName,
+            LocalDate occurredOn) {
+
+        this.id = requireNonBlank(id, "id");
+        this.accountId = requireNonBlank(accountId, "accountId");
+        this.amount = normalizeAmount(amount);
+        this.merchantName = requireNonBlank(merchantName, "merchantName");
+        this.occurredOn = Objects.requireNonNull(occurredOn, "occurredOn must not be null");
+    }
+
+    private static String requireNonBlank(String value, String fieldName) {
+        Objects.requireNonNull(value, fieldName + " must not be null");
+        if (value.isBlank()) {
+            throw new IllegalArgumentException(fieldName + " must be non-blank");
         }
-        if (accountId.isBlank()) {
-            throw new IllegalArgumentException("accountId must not be blank");
+        return value;
+    }
+
+    private static BigDecimal normalizeAmount(BigDecimal value) {
+        Objects.requireNonNull(value, "amount must not be null");
+        if (value.signum() < 0) {
+            throw new IllegalArgumentException("amount must be >= 0");
         }
-        if (merchantName.isBlank()) {
-            throw new IllegalArgumentException("merchantName must not be blank");
-        }
-        if (amount.signum() < 0) {
-            throw new IllegalArgumentException("amount must not be negative");
-        }
-        this.id = id;
-        this.accountId = accountId;
-        this.amount = amount.setScale(2, RoundingMode.HALF_UP);
-        this.merchantName = merchantName;
-        this.occurredOn = occurredOn;
+        return value.setScale(2, RoundingMode.HALF_UP);
     }
 
     public String id() {
@@ -59,14 +64,18 @@ public final class Transaction {
     }
 
     @Override
-    public boolean equals(Object o) {
-        if (this == o) return true;
-        if (!(o instanceof Transaction other)) return false;
-        return id.equals(other.id)
-                && accountId.equals(other.accountId)
-                && amount.equals(other.amount)
-                && merchantName.equals(other.merchantName)
-                && occurredOn.equals(other.occurredOn);
+    public boolean equals(Object other) {
+        if (this == other) {
+            return true;
+        }
+        if (!(other instanceof Transaction that)) {
+            return false;
+        }
+        return id.equals(that.id)
+                && accountId.equals(that.accountId)
+                && amount.equals(that.amount)
+                && merchantName.equals(that.merchantName)
+                && occurredOn.equals(that.occurredOn);
     }
 
     @Override
@@ -76,10 +85,11 @@ public final class Transaction {
 
     @Override
     public String toString() {
-        return "Transaction{id=" + id
-                + ", accountId=" + accountId
+        return "Transaction{"
+                + "id='" + id + '\''
+                + ", accountId='" + accountId + '\''
                 + ", amount=" + amount
-                + ", merchantName=" + merchantName
+                + ", merchantName='" + merchantName + '\''
                 + ", occurredOn=" + occurredOn
                 + '}';
     }
