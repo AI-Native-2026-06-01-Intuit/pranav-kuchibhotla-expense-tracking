@@ -4,6 +4,10 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.Objects;
 
+/**
+ * A category that may be assigned to a {@link Transaction}, along with the
+ * percentage of the transaction amount that is tax-deductible (0–100).
+ */
 public final class ExpenseCategory {
 
     private final String id;

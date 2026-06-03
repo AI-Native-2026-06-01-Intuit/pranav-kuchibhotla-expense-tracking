@@ -5,6 +5,10 @@ import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.util.Objects;
 
+/**
+ * A single expense entry recorded against an account: an amount spent at a
+ * merchant on a given date. Immutable; amount is stored at scale 2 (HALF_UP).
+ */
 public final class Transaction {
 
     private final String id;

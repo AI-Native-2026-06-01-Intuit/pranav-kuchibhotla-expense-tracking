@@ -6,6 +6,10 @@ import java.util.Objects;
 import com.uptimecrew.expense.model.Transaction;
 import com.uptimecrew.expense.model.TransactionKind;
 
+/**
+ * A {@link TransactionClassifier} that infers {@link TransactionKind} from
+ * the transaction's merchant name using a small keyword list.
+ */
 public final class MerchantNameClassifier implements TransactionClassifier {
 
     @Override

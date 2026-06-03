@@ -3,6 +3,10 @@ package com.uptimecrew.expense.model;
 import java.time.Instant;
 import java.util.Objects;
 
+/**
+ * A captured receipt image attached to a {@link Transaction}, identified by
+ * an external image reference and the instant it was captured.
+ */
 public final class Receipt {
 
     private final String id;
