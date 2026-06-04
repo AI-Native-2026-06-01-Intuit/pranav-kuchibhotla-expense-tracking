@@ -42,3 +42,7 @@ Adds a queryable transaction ledger using immutable collection snapshots, stream
 ## Day 3
 
 Adds multiple transaction-classification strategies, a factory for choosing them, constructor-injected classification service behavior, record-based model code, and Mockito-backed service tests.
+
+## Day 4
+
+Adds typed expense-classification exceptions, SLF4J/Logback service logging, AssertJ exception assertions, and Logback ListAppender tests.
