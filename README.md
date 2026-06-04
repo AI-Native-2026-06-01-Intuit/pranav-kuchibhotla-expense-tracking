@@ -38,3 +38,7 @@ Requires JDK 17+. Uses the Gradle wrapper.
 ## Day 2
 
 Adds a queryable transaction ledger using immutable collection snapshots, stream pipelines, Optional-based lookup, and parameterized JUnit 5 tests.
+
+## Day 3
+
+Adds multiple transaction-classification strategies, a factory for choosing them, constructor-injected classification service behavior, record-based model code, and Mockito-backed service tests.

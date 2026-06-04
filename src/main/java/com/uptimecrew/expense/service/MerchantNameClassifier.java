@@ -7,8 +7,7 @@ import com.uptimecrew.expense.model.Transaction;
 import com.uptimecrew.expense.model.TransactionKind;
 
 /**
- * A {@link TransactionClassifier} that infers {@link TransactionKind} from
- * the transaction's merchant name using a small keyword list.
+ * Classifies transactions using simple merchant-name keyword rules.
  */
 public final class MerchantNameClassifier implements TransactionClassifier {
 
@@ -27,5 +26,20 @@ public final class MerchantNameClassifier implements TransactionClassifier {
         }
 
         return TransactionKind.NON_DEDUCTIBLE;
+    }
+
+    @Override
+    public boolean equals(Object other) {
+        return other instanceof MerchantNameClassifier;
+    }
+
+    @Override
+    public int hashCode() {
+        return MerchantNameClassifier.class.hashCode();
+    }
+
+    @Override
+    public String toString() {
+        return "MerchantNameClassifier{}";
     }
 }
