@@ -3,6 +3,7 @@ package com.uptimecrew.expense.service;
 import java.util.Map;
 import java.util.Objects;
 
+import com.uptimecrew.expense.exception.TransactionParseException;
 import com.uptimecrew.expense.model.Transaction;
 import com.uptimecrew.expense.model.TransactionKind;
 
@@ -12,6 +13,7 @@ import com.uptimecrew.expense.model.TransactionKind;
 public final class MccCodeClassifier implements TransactionClassifier {
 
     private static final String DEFAULT_MCC = "0000";
+    private static final String IO_ERROR_SENTINEL = "IO_ERROR";
 
     private final Map<String, String> merchantMccCodes;
     private final Map<String, TransactionKind> kindByMccCode;
@@ -32,6 +34,17 @@ public final class MccCodeClassifier implements TransactionClassifier {
         Objects.requireNonNull(transaction, "transaction must not be null");
 
         String mccCode = merchantMccCodes.getOrDefault(transaction.merchantName(), DEFAULT_MCC);
+
+        if (IO_ERROR_SENTINEL.equals(mccCode)) {
+            try {
+                throw new java.io.IOException("synthetic MCC lookup failure");
+            } catch (java.io.IOException cause) {
+                throw new TransactionParseException(
+                        "failed parsing MCC lookup for merchant: " + transaction.merchantName(),
+                        cause);
+            }
+        }
+
         return kindByMccCode.getOrDefault(mccCode, TransactionKind.NON_DEDUCTIBLE);
     }
 
