@@ -34,3 +34,7 @@ Requires JDK 17+. Uses the Gradle wrapper.
 - Identifiers: `String` — never numeric ID types
 - Dates: `java.time.LocalDate` for calendar dates, `java.time.Instant` for timestamps
 - Tests: JUnit 5 only
+
+## Day 2
+
+Adds a queryable transaction ledger using immutable collection snapshots, stream pipelines, Optional-based lookup, and parameterized JUnit 5 tests.
