@@ -78,4 +78,70 @@ class RecurringChargeClassifierTest {
         assertThatThrownBy(() -> new RecurringChargeClassifier(history))
                 .isInstanceOf(NullPointerException.class);
     }
+
+    @Test
+    @DisplayName("classify_nonMonthlyCadence_returnsNonDeductible")
+    void classify_nonMonthlyCadence_returnsNonDeductible() {
+        // Arrange
+        Transaction jan = new Transaction(
+                "t-1", "acct-1", new BigDecimal("9.99"), "Netflix", LocalDate.of(2026, 1, 1));
+        Transaction feb = new Transaction(
+                "t-2", "acct-1", new BigDecimal("9.99"), "Netflix", LocalDate.of(2026, 2, 20));
+        Transaction current = new Transaction(
+                "t-3", "acct-1", new BigDecimal("9.99"), "Netflix", LocalDate.of(2026, 3, 22));
+        RecurringChargeClassifier classifier = new RecurringChargeClassifier(List.of(jan, feb));
+
+        // Act
+        TransactionKind kind = classifier.classify(current);
+
+        // Assert
+        assertThat(kind).isEqualTo(TransactionKind.NON_DEDUCTIBLE);
+    }
+
+    @Test
+    @DisplayName("classify_nullTransaction_throwsNullPointerException")
+    void classify_nullTransaction_throwsNullPointerException() {
+        // Arrange
+        Transaction prior = new Transaction(
+                "t-1", "acct-1", new BigDecimal("9.99"), "Netflix", LocalDate.of(2026, 1, 10));
+        RecurringChargeClassifier classifier = new RecurringChargeClassifier(List.of(prior));
+
+        // Act + Assert
+        assertThatThrownBy(() -> classifier.classify(null))
+                .isInstanceOf(NullPointerException.class);
+    }
+
+    @Test
+    @DisplayName("classify_shortCadence_returnsNonDeductible")
+    void classify_shortCadence_returnsNonDeductible() {
+        // Arrange
+        Transaction jan = new Transaction(
+                "t-1", "acct-1", new BigDecimal("9.99"), "Netflix", LocalDate.of(2026, 1, 1));
+        Transaction janLate = new Transaction(
+                "t-2", "acct-1", new BigDecimal("9.99"), "Netflix", LocalDate.of(2026, 1, 21));
+        Transaction current = new Transaction(
+                "t-3", "acct-1", new BigDecimal("9.99"), "Netflix", LocalDate.of(2026, 2, 15));
+        RecurringChargeClassifier classifier = new RecurringChargeClassifier(List.of(jan, janLate));
+
+        // Act
+        TransactionKind kind = classifier.classify(current);
+
+        // Assert
+        assertThat(kind).isEqualTo(TransactionKind.NON_DEDUCTIBLE);
+    }
+
+    @Test
+    @DisplayName("classify_emptyHistory_returnsNonDeductible")
+    void classify_emptyHistory_returnsNonDeductible() {
+        // Arrange
+        RecurringChargeClassifier classifier = new RecurringChargeClassifier(List.of());
+        Transaction current = new Transaction(
+                "t-1", "acct-1", new BigDecimal("9.99"), "Netflix", LocalDate.of(2026, 3, 1));
+
+        // Act
+        TransactionKind kind = classifier.classify(current);
+
+        // Assert
+        assertThat(kind).isEqualTo(TransactionKind.NON_DEDUCTIBLE);
+    }
 }

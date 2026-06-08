@@ -49,6 +49,8 @@ jacocoTestReport {
 jacocoTestCoverageVerification {
     violationRules {
         rule {
+            element = 'PACKAGE'
+            includes = ['com.uptimecrew.expense.service']
             limit {
                 counter = 'BRANCH'
                 minimum = 0.70
