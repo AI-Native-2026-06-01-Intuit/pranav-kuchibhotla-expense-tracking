@@ -46,3 +46,7 @@ Adds multiple transaction-classification strategies, a factory for choosing them
 ## Day 4
 
 Adds typed expense-classification exceptions, SLF4J/Logback service logging, AssertJ exception assertions, and Logback ListAppender tests.
+
+## Day 5
+
+Adds a TDD-built recurring-charge classifier, a Transaction test data builder, JaCoCo coverage reporting, and a prompt journal.
