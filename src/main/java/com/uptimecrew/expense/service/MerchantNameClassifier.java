@@ -3,6 +3,7 @@ package com.uptimecrew.expense.service;
 import java.util.Locale;
 import java.util.Objects;
 
+import com.uptimecrew.expense.exception.UnrecognizedMerchantException;
 import com.uptimecrew.expense.model.Transaction;
 import com.uptimecrew.expense.model.TransactionKind;
 
@@ -15,7 +16,13 @@ public final class MerchantNameClassifier implements TransactionClassifier {
     public TransactionKind classify(Transaction transaction) {
         Objects.requireNonNull(transaction, "transaction must not be null");
 
-        String merchantName = transaction.merchantName().toLowerCase(Locale.ROOT);
+        String rawMerchantName = transaction.merchantName();
+        if (rawMerchantName.trim().isEmpty()) {
+            throw new UnrecognizedMerchantException(
+                    "unrecognized merchant: '" + rawMerchantName + "'");
+        }
+
+        String merchantName = rawMerchantName.toLowerCase(Locale.ROOT);
 
         if (merchantName.contains("office")
                 || merchantName.contains("depot")
