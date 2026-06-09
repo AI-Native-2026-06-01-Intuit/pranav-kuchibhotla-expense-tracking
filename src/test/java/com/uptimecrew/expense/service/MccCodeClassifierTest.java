@@ -3,14 +3,13 @@ package com.uptimecrew.expense.service;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
-import java.math.BigDecimal;
-import java.time.LocalDate;
 import java.util.Map;
 
 import org.junit.jupiter.api.Test;
 
 import com.uptimecrew.expense.model.Transaction;
 import com.uptimecrew.expense.model.TransactionKind;
+import com.uptimecrew.expense.model.TransactionTestDataBuilder;
 
 class MccCodeClassifierTest {
 
@@ -43,11 +42,8 @@ class MccCodeClassifierTest {
     }
 
     private static Transaction transaction(String merchantName) {
-        return new Transaction(
-                "txn-synth-001",
-                "acct-synth-001",
-                new BigDecimal("487.50"),
-                merchantName,
-                LocalDate.of(2026, 3, 1));
+        return TransactionTestDataBuilder.aTransaction()
+                .withMerchantName(merchantName)
+                .build();
     }
 }

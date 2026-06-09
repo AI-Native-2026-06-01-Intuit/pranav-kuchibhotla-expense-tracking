@@ -3,13 +3,13 @@ package com.uptimecrew.expense.service;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
-import java.math.BigDecimal;
-import java.time.LocalDate;
-
 import org.junit.jupiter.api.Test;
 
 import com.uptimecrew.expense.model.Transaction;
 import com.uptimecrew.expense.model.TransactionKind;
+import com.uptimecrew.expense.model.TransactionTestDataBuilder;
+
+import java.math.BigDecimal;
 
 class AmountThresholdClassifierTest {
 
@@ -40,11 +40,8 @@ class AmountThresholdClassifierTest {
     }
 
     private static Transaction transaction(String amount) {
-        return new Transaction(
-                "txn-synth-001",
-                "acct-synth-001",
-                new BigDecimal(amount),
-                "Office Depot",
-                LocalDate.of(2026, 3, 1));
+        return TransactionTestDataBuilder.aTransaction()
+                .withAmount(new BigDecimal(amount))
+                .build();
     }
 }
