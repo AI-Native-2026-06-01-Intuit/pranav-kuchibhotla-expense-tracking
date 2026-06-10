@@ -51,6 +51,10 @@ Adds typed expense-classification exceptions, SLF4J/Logback service logging, Ass
 
 Adds a TDD-built recurring-charge classifier, a Transaction test data builder, JaCoCo coverage reporting, and a prompt journal.
 
+## Week 2 Day 1
+
+Adds Postgres schema, transactional seed, verification SQL, and database README for expense classification persistence.
+
 ## Prompt Journal
 
 ### Entry 1
