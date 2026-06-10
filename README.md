@@ -55,6 +55,10 @@ Adds a TDD-built recurring-charge classifier, a Transaction test data builder, J
 
 Adds Postgres schema, transactional seed, verification SQL, and database README for expense classification persistence.
 
+## Week 2 Day 2
+
+Adds advanced SQL query files (`db/queries/*.sql`: joins, CTE, window, GROUP BY + HAVING) and a Testcontainers-backed `MerchantQueryIT` that applies the schema + seed and validates the queries against a real Postgres 16 container.
+
 ## Prompt Journal
 
 ### Entry 1
