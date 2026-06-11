@@ -1,6 +1,8 @@
 plugins {
     id 'java'
     id 'jacoco'
+    id 'org.springframework.boot' version '3.5.7'
+    id 'io.spring.dependency-management' version '1.1.7'
 }
 
 group   = 'com.uptimecrew.expense'
@@ -17,6 +19,12 @@ repositories {
 }
 
 dependencies {
+    implementation 'org.springframework.boot:spring-boot-starter'
+    implementation 'org.springframework.boot:spring-boot-starter-web'
+    implementation 'org.springframework.boot:spring-boot-starter-actuator'
+    runtimeOnly    'org.springframework.boot:spring-boot-starter-jdbc'
+    runtimeOnly    'org.postgresql:postgresql:42.7.3'
+
     testImplementation platform('org.junit:junit-bom:5.10.2')
     testImplementation 'org.junit.jupiter:junit-jupiter'
     testImplementation 'org.junit.jupiter:junit-jupiter-params'
@@ -32,6 +40,7 @@ dependencies {
     testImplementation 'org.testcontainers:postgresql'
     testImplementation 'org.testcontainers:junit-jupiter'
     testImplementation 'org.postgresql:postgresql:42.7.3'
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
 }
 
 test {
