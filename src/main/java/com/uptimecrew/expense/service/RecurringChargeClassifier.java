@@ -8,6 +8,8 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
 
+// Not a Spring @Component: requires a List<Transaction> history with no existing default.
+// Construct directly with a caller-supplied history or via a future @Bean factory.
 public final class RecurringChargeClassifier implements TransactionClassifier {
 
     private final List<Transaction> history;

@@ -4,6 +4,7 @@ import java.util.Objects;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Service;
 
 import com.uptimecrew.expense.exception.ExpenseClassificationException;
 import com.uptimecrew.expense.model.Transaction;
@@ -12,6 +13,7 @@ import com.uptimecrew.expense.model.TransactionKind;
 /**
  * Service that classifies expenses by delegating to an injected transaction classifier.
  */
+@Service
 public final class ExpenseClassificationService {
 
     private static final Logger LOG = LoggerFactory.getLogger(ExpenseClassificationService.class);

@@ -10,6 +10,8 @@ import com.uptimecrew.expense.model.TransactionKind;
 /**
  * Classifies transactions using a merchant-name-to-MCC lookup snapshot.
  */
+// Not a Spring @Component: requires merchant-MCC and MCC-kind maps with no existing defaults.
+// Construct via TransactionClassifiers.byMccLookup(...) or a future @Bean factory.
 public final class MccCodeClassifier implements TransactionClassifier {
 
     private static final String DEFAULT_MCC = "0000";

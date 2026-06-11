@@ -10,6 +10,8 @@ import com.uptimecrew.expense.model.TransactionKind;
 /**
  * Classifies transactions as deductible when their amount meets or exceeds a configured threshold.
  */
+// Not a Spring @Component: requires a BigDecimal threshold with no existing default.
+// Construct via TransactionClassifiers.byAmountThreshold(...) or a future @Bean factory.
 public final class AmountThresholdClassifier implements TransactionClassifier {
 
     private final BigDecimal threshold;
