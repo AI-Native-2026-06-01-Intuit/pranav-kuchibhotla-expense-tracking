@@ -1,6 +1,8 @@
 plugins {
     id 'java'
     id 'jacoco'
+    id 'org.springframework.boot' version '3.5.7'
+    id 'io.spring.dependency-management' version '1.1.7'
 }
 
 group   = 'com.uptimecrew.expense'
@@ -17,14 +19,18 @@ repositories {
 }
 
 dependencies {
+    implementation 'org.springframework.boot:spring-boot-starter'
+    implementation 'org.springframework.boot:spring-boot-starter-web'
+    implementation 'org.springframework.boot:spring-boot-starter-actuator'
+    runtimeOnly    'org.springframework.boot:spring-boot-starter-jdbc'
+    runtimeOnly    'org.postgresql:postgresql:42.7.3'
+
     testImplementation platform('org.junit:junit-bom:5.10.2')
     testImplementation 'org.junit.jupiter:junit-jupiter'
     testImplementation 'org.junit.jupiter:junit-jupiter-params'
     testImplementation 'org.mockito:mockito-core:5.10.0'
     testImplementation 'org.mockito:mockito-junit-jupiter:5.10.0'
     implementation    'org.slf4j:slf4j-api:2.0.12'
-    runtimeOnly       'ch.qos.logback:logback-classic:1.5.6'
-    testImplementation 'ch.qos.logback:logback-classic:1.5.6'
     testImplementation 'org.assertj:assertj-core:3.25.3'
     testRuntimeOnly    'org.junit.platform:junit-platform-launcher'
 
@@ -32,6 +38,7 @@ dependencies {
     testImplementation 'org.testcontainers:postgresql'
     testImplementation 'org.testcontainers:junit-jupiter'
     testImplementation 'org.postgresql:postgresql:42.7.3'
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
 }
 
 test {

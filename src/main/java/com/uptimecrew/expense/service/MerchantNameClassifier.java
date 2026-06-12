@@ -3,6 +3,9 @@ package com.uptimecrew.expense.service;
 import java.util.Locale;
 import java.util.Objects;
 
+import org.springframework.context.annotation.Primary;
+import org.springframework.stereotype.Component;
+
 import com.uptimecrew.expense.exception.UnrecognizedMerchantException;
 import com.uptimecrew.expense.model.Transaction;
 import com.uptimecrew.expense.model.TransactionKind;
@@ -10,6 +13,8 @@ import com.uptimecrew.expense.model.TransactionKind;
 /**
  * Classifies transactions using simple merchant-name keyword rules.
  */
+@Component
+@Primary
 public final class MerchantNameClassifier implements TransactionClassifier {
 
     @Override
