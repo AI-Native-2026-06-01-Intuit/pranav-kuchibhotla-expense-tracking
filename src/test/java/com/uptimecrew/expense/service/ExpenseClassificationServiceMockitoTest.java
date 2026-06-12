@@ -13,14 +13,19 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import com.uptimecrew.expense.entity.Merchant;
 import com.uptimecrew.expense.model.Transaction;
 import com.uptimecrew.expense.model.TransactionKind;
+import com.uptimecrew.expense.repository.MerchantRepository;
 
 @ExtendWith(MockitoExtension.class)
 class ExpenseClassificationServiceMockitoTest {
 
     @Mock
     private TransactionClassifier classifier;
+
+    @Mock
+    private MerchantRepository merchantRepository;
 
     @Test
     void classify_validTransaction_delegatesToInjectedClassifier() {
@@ -33,12 +38,16 @@ class ExpenseClassificationServiceMockitoTest {
 
         when(classifier.classify(any(Transaction.class)))
                 .thenReturn(TransactionKind.DEDUCTIBLE);
+        when(merchantRepository.save(any(Merchant.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
 
-        ExpenseClassificationService subject = new ExpenseClassificationService(classifier);
+        ExpenseClassificationService subject =
+                new ExpenseClassificationService(classifier, merchantRepository);
 
         TransactionKind result = subject.classify(transaction);
 
         assertEquals(TransactionKind.DEDUCTIBLE, result);
         verify(classifier).classify(transaction);
+        verify(merchantRepository).save(any(Merchant.class));
     }
 }
