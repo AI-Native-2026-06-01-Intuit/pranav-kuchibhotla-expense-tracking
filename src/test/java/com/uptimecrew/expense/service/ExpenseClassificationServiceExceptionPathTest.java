@@ -3,6 +3,8 @@ package com.uptimecrew.expense.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.io.IOException;
@@ -22,15 +24,20 @@ import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 
+import com.uptimecrew.expense.entity.Merchant;
 import com.uptimecrew.expense.exception.TransactionParseException;
 import com.uptimecrew.expense.exception.UnrecognizedMerchantException;
 import com.uptimecrew.expense.model.Transaction;
+import com.uptimecrew.expense.repository.MerchantRepository;
 
 @ExtendWith(MockitoExtension.class)
 class ExpenseClassificationServiceExceptionPathTest {
 
     @Mock
     private TransactionClassifier classifier;
+
+    @Mock
+    private MerchantRepository merchantRepository;
 
     private Logger serviceLogger;
     private ListAppender<ILoggingEvent> appender;
@@ -54,11 +61,14 @@ class ExpenseClassificationServiceExceptionPathTest {
         when(classifier.classify(any(Transaction.class)))
                 .thenThrow(new UnrecognizedMerchantException("unrecognized merchant: "));
 
-        ExpenseClassificationService subject = new ExpenseClassificationService(classifier);
+        ExpenseClassificationService subject =
+                new ExpenseClassificationService(classifier, merchantRepository);
 
         assertThatThrownBy(() -> subject.classify(validTransaction()))
                 .isInstanceOf(UnrecognizedMerchantException.class)
                 .hasMessageContaining("unrecognized merchant");
+
+        verify(merchantRepository, never()).save(any(Merchant.class));
     }
 
     @Test
@@ -67,11 +77,14 @@ class ExpenseClassificationServiceExceptionPathTest {
         when(classifier.classify(any(Transaction.class)))
                 .thenThrow(new TransactionParseException("failed parsing transaction row", cause));
 
-        ExpenseClassificationService subject = new ExpenseClassificationService(classifier);
+        ExpenseClassificationService subject =
+                new ExpenseClassificationService(classifier, merchantRepository);
 
         assertThatThrownBy(() -> subject.classify(validTransaction()))
                 .isInstanceOf(TransactionParseException.class)
                 .hasRootCauseInstanceOf(IOException.class);
+
+        verify(merchantRepository, never()).save(any(Merchant.class));
     }
 
     @Test
@@ -79,7 +92,8 @@ class ExpenseClassificationServiceExceptionPathTest {
         when(classifier.classify(any(Transaction.class)))
                 .thenThrow(new UnrecognizedMerchantException("unrecognized merchant: Office Depot"));
 
-        ExpenseClassificationService subject = new ExpenseClassificationService(classifier);
+        ExpenseClassificationService subject =
+                new ExpenseClassificationService(classifier, merchantRepository);
 
         assertThatThrownBy(() -> subject.classify(validTransaction()))
                 .isInstanceOf(UnrecognizedMerchantException.class);
@@ -89,6 +103,8 @@ class ExpenseClassificationServiceExceptionPathTest {
                 .singleElement()
                 .satisfies(event -> assertThat(event.getFormattedMessage())
                         .contains("unrecognized merchant: Office Depot"));
+
+        verify(merchantRepository, never()).save(any(Merchant.class));
     }
 
     private Transaction validTransaction() {
