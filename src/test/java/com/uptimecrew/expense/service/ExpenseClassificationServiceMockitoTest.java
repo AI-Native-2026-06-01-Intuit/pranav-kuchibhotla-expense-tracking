@@ -49,6 +49,8 @@ class ExpenseClassificationServiceMockitoTest {
                 .thenReturn(TransactionKind.DEDUCTIBLE);
         when(merchantRepository.save(any(Merchant.class)))
                 .thenAnswer(inv -> inv.getArgument(0));
+        when(merchantReadModelRepository.save(any(MerchantReadModel.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
 
         ExpenseClassificationService subject =
                 new ExpenseClassificationService(
@@ -59,6 +61,7 @@ class ExpenseClassificationServiceMockitoTest {
         assertEquals(TransactionKind.DEDUCTIBLE, result);
         verify(classifier).classify(transaction);
         verify(merchantRepository).save(any(Merchant.class));
+        verify(merchantReadModelRepository).save(any(MerchantReadModel.class));
     }
 
     @Test

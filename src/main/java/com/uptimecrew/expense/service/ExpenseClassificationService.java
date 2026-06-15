@@ -57,6 +57,11 @@ public class ExpenseClassificationService {
             Merchant saved = merchantRepository.save(buildMerchantFrom(transaction));
             LOG.info("persisted merchant id={}", saved.getId());
 
+            MerchantReadModel projection = toReadModel(saved);
+            merchantReadModelRepository.save(projection);
+            LOG.info("wrote merchant read model id={} normalizedName={}",
+                    projection.getId(), projection.getNormalizedName());
+
             return kind;
         } catch (ExpenseClassificationException ex) {
             LOG.warn("strategy failed: {}", ex.getMessage(), ex);
@@ -64,7 +69,7 @@ public class ExpenseClassificationService {
         }
     }
 
-    @Cacheable(value = CACHE_NAME, unless = "#result == null || #result.isEmpty()")
+    @Cacheable(value = CACHE_NAME, unless = "#result == null")
     @Transactional(readOnly = true)
     public Optional<MerchantReadModel> findById(String id) {
         Objects.requireNonNull(id, "id");

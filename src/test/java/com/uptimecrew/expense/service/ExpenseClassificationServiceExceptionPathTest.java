@@ -28,6 +28,7 @@ import com.uptimecrew.expense.entity.Merchant;
 import com.uptimecrew.expense.exception.TransactionParseException;
 import com.uptimecrew.expense.exception.UnrecognizedMerchantException;
 import com.uptimecrew.expense.model.Transaction;
+import com.uptimecrew.expense.readmodel.MerchantReadModel;
 import com.uptimecrew.expense.readmodel.MerchantReadModelRepository;
 import com.uptimecrew.expense.repository.MerchantRepository;
 
@@ -74,6 +75,7 @@ class ExpenseClassificationServiceExceptionPathTest {
                 .hasMessageContaining("unrecognized merchant");
 
         verify(merchantRepository, never()).save(any(Merchant.class));
+        verify(merchantReadModelRepository, never()).save(any(MerchantReadModel.class));
     }
 
     @Test
@@ -91,6 +93,7 @@ class ExpenseClassificationServiceExceptionPathTest {
                 .hasRootCauseInstanceOf(IOException.class);
 
         verify(merchantRepository, never()).save(any(Merchant.class));
+        verify(merchantReadModelRepository, never()).save(any(MerchantReadModel.class));
     }
 
     @Test
@@ -112,6 +115,7 @@ class ExpenseClassificationServiceExceptionPathTest {
                         .contains("unrecognized merchant: Office Depot"));
 
         verify(merchantRepository, never()).save(any(Merchant.class));
+        verify(merchantReadModelRepository, never()).save(any(MerchantReadModel.class));
     }
 
     private Transaction validTransaction() {
