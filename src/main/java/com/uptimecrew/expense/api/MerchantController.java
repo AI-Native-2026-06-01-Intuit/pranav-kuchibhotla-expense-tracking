@@ -1,5 +1,6 @@
 package com.uptimecrew.expense.api;
 
+import java.util.Map;
 import java.util.Optional;
 
 import org.slf4j.Logger;
@@ -36,5 +37,14 @@ public class MerchantController {
         Optional<MerchantReadModel> result = service.findById(id);
         return result.map(ResponseEntity::ok)
                 .orElseGet(() -> ResponseEntity.notFound().build());
+    }
+
+    @GetMapping("/{id}/summary")
+    @PreAuthorize("hasAuthority('SCOPE_merchants.read') and hasRole('MERCHANT_READER')")
+    public Map<String, String> getSummary(@PathVariable String id,
+                                          @AuthenticationPrincipal Jwt jwt) throws InterruptedException {
+        LOG.info("GET /api/merchants/{}/summary subject={}", id, jwt.getSubject());
+        Thread.sleep(100);
+        return Map.of("summary", "Stub LLM summary for " + id);
     }
 }
