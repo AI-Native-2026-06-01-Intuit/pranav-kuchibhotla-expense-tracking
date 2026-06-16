@@ -2,6 +2,7 @@ package com.uptimecrew.expense;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.cache.annotation.EnableCaching;
 
 /**
  * Spring Boot entry point for the expense-tracking application.
@@ -11,6 +12,7 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
  * stereotype-annotated classes (added later) will be picked up automatically.
  */
 @SpringBootApplication
+@EnableCaching
 public final class Application {
 
     public static void main(String[] args) {

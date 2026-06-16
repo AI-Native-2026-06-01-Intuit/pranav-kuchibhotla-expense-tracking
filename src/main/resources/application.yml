@@ -9,6 +9,18 @@ spring:
     password: ${DB_PASSWORD:devpass}
     hikari:
       maximum-pool-size: 5
+  data:
+    mongodb:
+      uri: mongodb://localhost:27017/expense
+      auto-index-creation: true
+    redis:
+      host: localhost
+      port: 6379
+  cache:
+    type: redis
+    redis:
+      time-to-live: 60000
+      cache-null-values: false
   jpa:
     hibernate:
       ddl-auto: validate
