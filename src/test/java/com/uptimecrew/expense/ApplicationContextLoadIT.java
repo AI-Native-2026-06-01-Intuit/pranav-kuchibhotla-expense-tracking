@@ -22,8 +22,8 @@ import com.uptimecrew.expense.service.ExpenseClassificationService;
                 + "org.springframework.boot.autoconfigure.data.mongo.MongoDataAutoConfiguration,"
                 + "org.springframework.boot.autoconfigure.data.mongo.MongoRepositoriesAutoConfiguration,"
                 + "org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration,"
-                + "org.springframework.boot.autoconfigure.data.redis.RedisRepositoriesAutoConfiguration,"
-                + "org.springframework.boot.autoconfigure.cache.CacheAutoConfiguration"
+                + "org.springframework.boot.autoconfigure.data.redis.RedisRepositoriesAutoConfiguration",
+        "spring.cache.type=none"
 })
 @ActiveProfiles("test")
 class ApplicationContextLoadIT {

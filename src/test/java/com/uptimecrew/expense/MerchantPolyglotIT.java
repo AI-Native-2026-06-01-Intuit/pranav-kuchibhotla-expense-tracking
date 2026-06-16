@@ -87,7 +87,9 @@ class MerchantPolyglotIT {
         service.classify(tx);
 
         assertThat(merchantRepository.findById(expectedId)).isPresent();
-        assertThat(readModelRepository.findById(expectedId)).isPresent();
+        Optional<MerchantReadModel> mongoDoc = readModelRepository.findById(expectedId);
+        assertThat(mongoDoc).isPresent();
+        assertThat(mongoDoc.get().getMccCode()).isNotNull();
         assertThat(service.findById(expectedId)).isPresent();
     }
 

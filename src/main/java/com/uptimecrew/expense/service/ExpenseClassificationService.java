@@ -57,10 +57,10 @@ public class ExpenseClassificationService {
             Merchant saved = merchantRepository.save(buildMerchantFrom(transaction));
             LOG.info("persisted merchant id={}", saved.getId());
 
-            MerchantReadModel projection = toReadModel(saved);
+            MerchantReadModel projection = toReadModel(saved, deriveMccCode(saved, kind));
             merchantReadModelRepository.save(projection);
-            LOG.info("wrote merchant read model id={} normalizedName={}",
-                    projection.getId(), projection.getNormalizedName());
+            LOG.info("wrote merchant read model id={} mccCode={}",
+                    projection.getId(), projection.getMccCode());
 
             return kind;
         } catch (ExpenseClassificationException ex) {
@@ -81,7 +81,8 @@ public class ExpenseClassificationService {
         }
 
         LOG.info("Mongo miss for id={}, falling back to JPA", id);
-        return merchantRepository.findById(id).map(this::toReadModel);
+        return merchantRepository.findById(id)
+                .map(m -> toReadModel(m, deriveMccCode(m, null)));
     }
 
     private static Merchant buildMerchantFrom(Transaction transaction) {
@@ -90,7 +91,7 @@ public class ExpenseClassificationService {
         return new Merchant(id, transaction.merchantName(), normalizedName, "UNKNOWN");
     }
 
-    private MerchantReadModel toReadModel(Merchant merchant) {
+    private MerchantReadModel toReadModel(Merchant merchant, String mccCode) {
         List<MerchantTransaction> txs = merchant.getTransactions();
         List<EmbeddedTransaction> embedded = txs.isEmpty()
                 ? List.of()
@@ -108,7 +109,18 @@ public class ExpenseClassificationService {
                 merchant.getDisplayName(),
                 merchant.getNormalizedName(),
                 merchant.getMerchantKind(),
+                mccCode,
                 merchant.getCreatedAt(),
                 embedded);
+    }
+
+    // The W2D1 JPA schema has no merchant.mcc_code column and the current
+    // TransactionClassifier returns only a TransactionKind (no MCC). The W2D5
+    // read-model spec still requires an indexed mccCode on the Mongo document,
+    // so we derive it from normalizedName as a documented fallback until a
+    // real MCC signal is added upstream. Kept here so the Mongo document
+    // always has a non-null mccCode and the @Indexed annotation is meaningful.
+    private static String deriveMccCode(Merchant merchant, TransactionKind kind) {
+        return merchant.getNormalizedName();
     }
 }

@@ -14,6 +14,7 @@ import java.util.Optional;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -61,7 +62,9 @@ class ExpenseClassificationServiceMockitoTest {
         assertEquals(TransactionKind.DEDUCTIBLE, result);
         verify(classifier).classify(transaction);
         verify(merchantRepository).save(any(Merchant.class));
-        verify(merchantReadModelRepository).save(any(MerchantReadModel.class));
+        ArgumentCaptor<MerchantReadModel> captor = ArgumentCaptor.forClass(MerchantReadModel.class);
+        verify(merchantReadModelRepository).save(captor.capture());
+        assertThat(captor.getValue().getMccCode()).isEqualTo("office depot");
     }
 
     @Test
@@ -71,6 +74,7 @@ class ExpenseClassificationServiceMockitoTest {
                 "Office Depot",
                 "office depot",
                 "UNKNOWN",
+                "office depot",
                 null,
                 List.of());
         when(merchantReadModelRepository.findById("merchant-office depot"))
@@ -104,6 +108,7 @@ class ExpenseClassificationServiceMockitoTest {
         assertThat(result.get().getDisplayName()).isEqualTo("Office Depot");
         assertThat(result.get().getNormalizedName()).isEqualTo("office depot");
         assertThat(result.get().getMerchantKind()).isEqualTo("UNKNOWN");
+        assertThat(result.get().getMccCode()).isEqualTo("office depot");
         assertThat(result.get().getTransactions()).isEmpty();
     }
 

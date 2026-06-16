@@ -27,10 +27,12 @@ public final class MerchantReadModel implements Serializable {
 
     private String displayName;
 
-    @Indexed
     private String normalizedName;
 
     private String merchantKind;
+
+    @Indexed
+    private String mccCode;
 
     private Instant createdAt;
 
@@ -43,12 +45,14 @@ public final class MerchantReadModel implements Serializable {
                              String displayName,
                              String normalizedName,
                              String merchantKind,
+                             String mccCode,
                              Instant createdAt,
                              List<EmbeddedTransaction> transactions) {
         this.id = id;
         this.displayName = displayName;
         this.normalizedName = normalizedName;
         this.merchantKind = merchantKind;
+        this.mccCode = mccCode;
         this.createdAt = createdAt;
         this.transactions = transactions != null ? transactions : new ArrayList<>();
     }
@@ -67,6 +71,10 @@ public final class MerchantReadModel implements Serializable {
 
     public String getMerchantKind() {
         return merchantKind;
+    }
+
+    public String getMccCode() {
+        return mccCode;
     }
 
     public Instant getCreatedAt() {
