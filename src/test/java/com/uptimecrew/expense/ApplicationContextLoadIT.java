@@ -8,6 +8,8 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
+import org.springframework.data.redis.core.StringRedisTemplate;
+
 import com.uptimecrew.expense.readmodel.MerchantReadModelRepository;
 import com.uptimecrew.expense.repository.MerchantRepository;
 import com.uptimecrew.expense.service.ExpenseClassificationService;
@@ -36,6 +38,9 @@ class ApplicationContextLoadIT {
 
     @MockitoBean
     MerchantReadModelRepository merchantReadModelRepository;
+
+    @MockitoBean
+    StringRedisTemplate stringRedisTemplate;
 
     @Test
     void context_loads_and_service_bean_is_wired() {

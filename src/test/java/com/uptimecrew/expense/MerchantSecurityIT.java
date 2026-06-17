@@ -2,6 +2,7 @@ package com.uptimecrew.expense;
 
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -12,6 +13,7 @@ import java.sql.DriverManager;
 import java.sql.Statement;
 import java.time.Instant;
 import java.util.List;
+import java.util.UUID;
 
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -92,7 +94,7 @@ class MerchantSecurityIT {
                 Instant.now(),
                 List.of()));
 
-        mockMvc.perform(get("/api/merchants/{id}", id)
+        mockMvc.perform(get("/api/v1/merchants/{id}", id)
                         .with(jwt()
                                 .jwt(j -> j
                                         .subject("security-user")
@@ -106,13 +108,13 @@ class MerchantSecurityIT {
 
     @Test
     void getById_returns401_whenAnonymous() throws Exception {
-        mockMvc.perform(get("/api/merchants/{id}", "test-id"))
+        mockMvc.perform(get("/api/v1/merchants/{id}", "test-id"))
                 .andExpect(status().isUnauthorized());
     }
 
     @Test
     void getById_returns403_whenJwtMissingRole() throws Exception {
-        mockMvc.perform(get("/api/merchants/{id}", "test-id")
+        mockMvc.perform(get("/api/v1/merchants/{id}", "test-id")
                         .with(jwt()
                                 .jwt(j -> j
                                         .subject("no-role-user")
@@ -134,12 +136,14 @@ class MerchantSecurityIT {
                         new SimpleGrantedAuthority("ROLE_MERCHANT_READER"));
 
         for (int i = 0; i < 10; i++) {
-            mockMvc.perform(get("/api/merchants/{id}/summary", "test-id")
+            mockMvc.perform(post("/api/v1/merchants/{id}/summary", "test-id")
+                            .header("Idempotency-Key", UUID.randomUUID().toString())
                             .with(jwtPostProcessor))
                     .andExpect(status().isOk());
         }
 
-        mockMvc.perform(get("/api/merchants/{id}/summary", "test-id")
+        mockMvc.perform(post("/api/v1/merchants/{id}/summary", "test-id")
+                        .header("Idempotency-Key", UUID.randomUUID().toString())
                         .with(jwtPostProcessor))
                 .andExpect(status().isTooManyRequests())
                 .andExpect(header().string("Retry-After", "60"))
