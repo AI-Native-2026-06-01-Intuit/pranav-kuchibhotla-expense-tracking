@@ -71,6 +71,10 @@ Adds Spring Data JPA: maps the W2D1 schema to `Merchant`/`MerchantTransaction`/`
 
 Adds a MongoDB `MerchantReadModel` (and Spring Data Mongo repository), a Redis-backed `@Cacheable` read path (`ExpenseClassificationService.findById`) gated by `@EnableCaching`, write-through from `ExpenseClassificationService.classify(...)` to the Mongo read model after the JPA save succeeds, and a polyglot `MerchantPolyglotIT` integration test driving real Postgres, MongoDB, and Redis containers via Testcontainers + `@ServiceConnection`.
 
+## Week 3 Day 1
+
+Adds Spring Security 7 Resource Server JWT protection (`SecurityConfig` with a single `SecurityFilterChain`, stateless sessions, `@EnableMethodSecurity`), a JWT authority mapper that combines the standard `scope` claim (`SCOPE_*`) with a custom `roles` claim (`ROLE_*`), a `@PreAuthorize`-guarded `MerchantController` exposing `GET /api/merchants/{id}` over the W2D5 cached read path, a Bucket4j-backed `RateLimitFilter` enforcing 10 req/min per JWT subject on the LLM `GET /api/merchants/{id}/summary` stub endpoint (429 + `Retry-After: 60`), and a `MerchantSecurityIT` covering the full security matrix (200 / 401 / 403 / 429) against real Postgres, MongoDB, and Redis Testcontainers via `@ServiceConnection`.
+
 ## Prompt Journal
 
 ### Entry 1
