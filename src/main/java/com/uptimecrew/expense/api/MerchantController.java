@@ -17,6 +17,8 @@ import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.uptimecrew.expense.clients.IdentityProfile;
+import com.uptimecrew.expense.clients.IdentityService;
 import com.uptimecrew.expense.readmodel.MerchantReadModel;
 import com.uptimecrew.expense.service.ExpenseClassificationService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -35,10 +37,14 @@ public class MerchantController {
 
     private final ExpenseClassificationService service;
     private final IdempotencyService idempotency;
+    private final IdentityService identityService;
 
-    public MerchantController(ExpenseClassificationService service, IdempotencyService idempotency) {
+    public MerchantController(ExpenseClassificationService service,
+                              IdempotencyService idempotency,
+                              IdentityService identityService) {
         this.service = service;
         this.idempotency = idempotency;
+        this.identityService = identityService;
     }
 
     @Operation(
@@ -66,7 +72,9 @@ public class MerchantController {
         description = "Returns a short LLM-generated summary for the given merchant. "
             + "Requires an Idempotency-Key header (UUID) so the same logical request is "
             + "served once within a 24-hour window. Rate-limited per caller; requires scope "
-            + "merchants.read and role MERCHANT_READER.",
+            + "merchants.read and role MERCHANT_READER. The response is enriched with the "
+            + "caller's displayName fetched from the identity service (circuit-breaker "
+            + "protected; falls back to an empty displayName on identity outage).",
         parameters = @Parameter(name = "Idempotency-Key", in = ParameterIn.HEADER,
             required = true, description = "Client-supplied UUID for idempotent replay"))
     @ApiResponses({
@@ -99,7 +107,10 @@ public class MerchantController {
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             }
-            return ResponseEntity.ok(Map.of("summary", "Stub LLM summary for " + id));
+            IdentityProfile profile = identityService.getProfile(jwt.getSubject());
+            return ResponseEntity.ok(Map.of(
+                "summary", "Stub LLM summary for " + id,
+                "displayName", profile.displayName()));
         });
     }
 }
