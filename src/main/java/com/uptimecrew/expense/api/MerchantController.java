@@ -2,6 +2,7 @@ package com.uptimecrew.expense.api;
 
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -11,12 +12,16 @@ import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.uptimecrew.expense.readmodel.MerchantReadModel;
 import com.uptimecrew.expense.service.ExpenseClassificationService;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.enums.ParameterIn;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -29,9 +34,11 @@ public class MerchantController {
     private static final Logger LOG = LoggerFactory.getLogger(MerchantController.class);
 
     private final ExpenseClassificationService service;
+    private final IdempotencyService idempotency;
 
-    public MerchantController(ExpenseClassificationService service) {
+    public MerchantController(ExpenseClassificationService service, IdempotencyService idempotency) {
         this.service = service;
+        this.idempotency = idempotency;
     }
 
     @Operation(
@@ -55,21 +62,44 @@ public class MerchantController {
     }
 
     @Operation(
-        summary = "Get LLM summary for merchant",
+        summary = "Generate LLM summary for merchant",
         description = "Returns a short LLM-generated summary for the given merchant. "
-            + "Rate-limited per caller; requires scope merchants.read and role MERCHANT_READER.")
+            + "Requires an Idempotency-Key header (UUID) so the same logical request is "
+            + "served once within a 24-hour window. Rate-limited per caller; requires scope "
+            + "merchants.read and role MERCHANT_READER.",
+        parameters = @Parameter(name = "Idempotency-Key", in = ParameterIn.HEADER,
+            required = true, description = "Client-supplied UUID for idempotent replay"))
     @ApiResponses({
         @ApiResponse(responseCode = "200", description = "Summary returned"),
+        @ApiResponse(responseCode = "400", description = "Missing or malformed Idempotency-Key"),
         @ApiResponse(responseCode = "401", description = "Missing or invalid JWT"),
         @ApiResponse(responseCode = "403", description = "JWT lacks required scope/role"),
+        @ApiResponse(responseCode = "409", description = "Idempotency-Key replay still in flight"),
         @ApiResponse(responseCode = "429", description = "Rate limit exceeded")
     })
-    @GetMapping("/{id}/summary")
+    @PostMapping("/{id}/summary")
     @PreAuthorize("hasAuthority('SCOPE_merchants.read') and hasRole('MERCHANT_READER')")
-    public Map<String, String> getSummary(@PathVariable String id,
-                                          @AuthenticationPrincipal Jwt jwt) throws InterruptedException {
-        LOG.info("GET /api/merchants/{}/summary subject={}", id, jwt.getSubject());
-        Thread.sleep(100);
-        return Map.of("summary", "Stub LLM summary for " + id);
+    public ResponseEntity<Map<String, String>> postSummary(
+            @PathVariable String id,
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+            @AuthenticationPrincipal Jwt jwt) {
+        LOG.info("POST /api/v1/merchants/{}/summary subject={}", id, jwt.getSubject());
+        if (idempotencyKey == null || idempotencyKey.isBlank()) {
+            return ResponseEntity.badRequest().build();
+        }
+        UUID parsedKey;
+        try {
+            parsedKey = UUID.fromString(idempotencyKey);
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().build();
+        }
+        return idempotency.handle(parsedKey.toString(), "merchants.summary", () -> {
+            try {
+                Thread.sleep(100);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            return ResponseEntity.ok(Map.of("summary", "Stub LLM summary for " + id));
+        });
     }
 }
