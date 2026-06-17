@@ -75,6 +75,10 @@ Adds a MongoDB `MerchantReadModel` (and Spring Data Mongo repository), a Redis-b
 
 Adds Spring Security 7 Resource Server JWT protection (`SecurityConfig` with a single `SecurityFilterChain`, stateless sessions, `@EnableMethodSecurity`), a JWT authority mapper that combines the standard `scope` claim (`SCOPE_*`) with a custom `roles` claim (`ROLE_*`), a `@PreAuthorize`-guarded `MerchantController` exposing `GET /api/merchants/{id}` over the W2D5 cached read path, a Bucket4j-backed `RateLimitFilter` enforcing 10 req/min per JWT subject on the LLM `GET /api/merchants/{id}/summary` stub endpoint (429 + `Retry-After: 60`), and a `MerchantSecurityIT` covering the full security matrix (200 / 401 / 403 / 429) against real Postgres, MongoDB, and Redis Testcontainers via `@ServiceConnection`.
 
+## Week 3 Day 2
+
+Versions the merchant API under `/api/v1/merchants` with springdoc OpenAPI 3.1 docs (`OpenApiConfig` exposing a `bearer-jwt` HTTP/JWT security scheme at `/v3/api-docs` and `/swagger-ui.html`), converts the LLM summary route to `POST /api/v1/merchants/{id}/summary` with Redis-backed `Idempotency-Key` semantics (`IdempotencyService` using a `__in_flight__` SETNX sentinel + 24h TTL, 400 on missing/invalid UUID, 409 on replay-in-flight), introduces a Spring Cloud OpenFeign `MerchantIdentityClient` wrapped by an `IdentityService` whose `getProfile` is protected by a Resilience4j `@CircuitBreaker(name = "identity")` with a degraded-profile fallback (configured in `application.yml`), enriches the summary response with the caller's `displayName` from identity, and adds a WireMock-backed `IdentityClientCircuitBreakerIT` (port 8090) that covers identity 200 happy-path decoding, breaker-opens-after-5xx with fallback + no further upstream calls, the end-to-end summary POST returning the identity displayName, and an OpenAPI assertion that `/v3/api-docs` exposes `/api/v1/merchants/{id}` and the `bearer-jwt` scheme.
+
 ## Prompt Journal
 
 ### Entry 1
