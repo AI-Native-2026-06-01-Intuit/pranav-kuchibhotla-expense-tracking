@@ -16,9 +16,14 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.uptimecrew.expense.readmodel.MerchantReadModel;
 import com.uptimecrew.expense.service.ExpenseClassificationService;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.responses.ApiResponses;
+import io.swagger.v3.oas.annotations.tags.Tag;
 
 @RestController
-@RequestMapping("/api/merchants")
+@RequestMapping("/api/v1/merchants")
+@Tag(name = "Merchants", description = "Merchants read API and LLM-summary endpoint")
 public class MerchantController {
 
     private static final Logger LOG = LoggerFactory.getLogger(MerchantController.class);
@@ -29,6 +34,16 @@ public class MerchantController {
         this.service = service;
     }
 
+    @Operation(
+        summary = "Get merchant by id",
+        description = "Returns the merchant read model for the given id. "
+            + "Requires a Bearer JWT with scope merchants.read and role MERCHANT_READER.")
+    @ApiResponses({
+        @ApiResponse(responseCode = "200", description = "Merchant found"),
+        @ApiResponse(responseCode = "401", description = "Missing or invalid JWT"),
+        @ApiResponse(responseCode = "403", description = "JWT lacks required scope/role"),
+        @ApiResponse(responseCode = "404", description = "Merchant not found")
+    })
     @GetMapping("/{id}")
     @PreAuthorize("hasAuthority('SCOPE_merchants.read') and hasRole('MERCHANT_READER')")
     public ResponseEntity<MerchantReadModel> getById(@PathVariable String id,
@@ -39,6 +54,16 @@ public class MerchantController {
                 .orElseGet(() -> ResponseEntity.notFound().build());
     }
 
+    @Operation(
+        summary = "Get LLM summary for merchant",
+        description = "Returns a short LLM-generated summary for the given merchant. "
+            + "Rate-limited per caller; requires scope merchants.read and role MERCHANT_READER.")
+    @ApiResponses({
+        @ApiResponse(responseCode = "200", description = "Summary returned"),
+        @ApiResponse(responseCode = "401", description = "Missing or invalid JWT"),
+        @ApiResponse(responseCode = "403", description = "JWT lacks required scope/role"),
+        @ApiResponse(responseCode = "429", description = "Rate limit exceeded")
+    })
     @GetMapping("/{id}/summary")
     @PreAuthorize("hasAuthority('SCOPE_merchants.read') and hasRole('MERCHANT_READER')")
     public Map<String, String> getSummary(@PathVariable String id,
