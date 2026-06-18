@@ -66,11 +66,14 @@ class MerchantPolyglotIT {
         PG.start();
         waitForPostgres();
 
-        String schemaSql = Files.readString(Path.of("db/V1__schema.sql"));
+        String v1 = Files.readString(Path.of("db/V1__schema.sql"));
+        String v3 = Files.readString(
+                Path.of("src/main/resources/db/migration/V3__event_outbox.sql"));
         try (Connection conn = DriverManager.getConnection(
                         PG.getJdbcUrl(), PG.getUsername(), PG.getPassword());
              Statement stmt = conn.createStatement()) {
-            stmt.execute(schemaSql);
+            stmt.execute(v1);
+            stmt.execute(v3);
         }
     }
 
