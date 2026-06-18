@@ -30,6 +30,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -53,6 +54,7 @@ import com.uptimecrew.expense.service.ExpenseClassificationService;
 @Testcontainers
 @SpringBootTest
 @ActiveProfiles("test")
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 class MerchantEventFlowIT {
 
     private static final String TOPIC = "merchants.events";
@@ -78,6 +80,8 @@ class MerchantEventFlowIT {
     @DynamicPropertySource
     static void kafkaProps(DynamicPropertyRegistry registry) {
         registry.add("spring.kafka.bootstrap-servers", KAFKA::getBootstrapServers);
+        registry.add("spring.kafka.producer.bootstrap-servers", KAFKA::getBootstrapServers);
+        registry.add("spring.kafka.consumer.bootstrap-servers", KAFKA::getBootstrapServers);
     }
 
     @Autowired
