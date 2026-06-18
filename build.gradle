@@ -16,6 +16,7 @@ java {
 
 repositories {
     mavenCentral()
+    maven { url 'https://repo.spring.io/milestone' }
 }
 
 dependencies {
@@ -33,6 +34,8 @@ dependencies {
     implementation 'org.springframework.cloud:spring-cloud-starter-circuitbreaker-resilience4j'
     implementation 'com.bucket4j:bucket4j-core:8.10.1'
     implementation 'com.bucket4j:bucket4j-redis:8.10.1'
+    implementation 'org.springframework.kafka:spring-kafka'
+    implementation 'org.springframework.ai:spring-ai-starter-mcp-server-webmvc:1.1.0-M1-PLATFORM'
     runtimeOnly    'org.springframework.boot:spring-boot-starter-jdbc'
     runtimeOnly    'org.postgresql:postgresql:42.7.3'
 
@@ -54,6 +57,9 @@ dependencies {
     testImplementation 'org.springframework.boot:spring-boot-testcontainers'
     testImplementation 'org.springframework.security:spring-security-test'
     testImplementation 'org.wiremock:wiremock-standalone:3.9.1'
+    testImplementation 'org.springframework.kafka:spring-kafka-test'
+    testImplementation 'org.testcontainers:kafka:1.20.4'
+    testImplementation 'org.awaitility:awaitility:4.2.2'
 }
 
 dependencyManagement {

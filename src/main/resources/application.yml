@@ -36,6 +36,33 @@ spring:
       resourceserver:
         jwt:
           issuer-uri: https://idp.example.internal/realms/uptimecrew
+  kafka:
+    bootstrap-servers: localhost:9092
+    producer:
+      acks: all
+      properties:
+        enable.idempotence: true
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+    consumer:
+      group-id: expense-read-model-builder
+      auto-offset-reset: earliest
+      enable-auto-commit: false
+      key-deserializer: org.springframework.kafka.support.serializer.ErrorHandlingDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.ErrorHandlingDeserializer
+      properties:
+        spring.deserializer.key.delegate.class: org.apache.kafka.common.serialization.StringDeserializer
+        spring.deserializer.value.delegate.class: org.springframework.kafka.support.serializer.JsonDeserializer
+        spring.json.trusted.packages: '*'
+    listener:
+      ack-mode: RECORD
+  ai:
+    mcp:
+      server:
+        name: expense-mcp
+        version: 1.0.0
+        type: SYNC
+        transport: SSE
 
 management:
   endpoints:
