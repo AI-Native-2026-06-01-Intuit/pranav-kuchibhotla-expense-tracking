@@ -24,10 +24,12 @@ import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.uptimecrew.expense.entity.Merchant;
 import com.uptimecrew.expense.exception.TransactionParseException;
 import com.uptimecrew.expense.exception.UnrecognizedMerchantException;
 import com.uptimecrew.expense.model.Transaction;
+import com.uptimecrew.expense.outbox.EventOutboxRepository;
 import com.uptimecrew.expense.readmodel.MerchantReadModel;
 import com.uptimecrew.expense.readmodel.MerchantReadModelRepository;
 import com.uptimecrew.expense.repository.MerchantRepository;
@@ -43,6 +45,11 @@ class ExpenseClassificationServiceExceptionPathTest {
 
     @Mock
     private MerchantReadModelRepository merchantReadModelRepository;
+
+    @Mock
+    private EventOutboxRepository eventOutboxRepository;
+
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     private Logger serviceLogger;
     private ListAppender<ILoggingEvent> appender;
@@ -68,7 +75,8 @@ class ExpenseClassificationServiceExceptionPathTest {
 
         ExpenseClassificationService subject =
                 new ExpenseClassificationService(
-                        classifier, merchantRepository, merchantReadModelRepository);
+                        classifier, merchantRepository, merchantReadModelRepository,
+                        eventOutboxRepository, objectMapper);
 
         assertThatThrownBy(() -> subject.classify(validTransaction()))
                 .isInstanceOf(UnrecognizedMerchantException.class)
@@ -86,7 +94,8 @@ class ExpenseClassificationServiceExceptionPathTest {
 
         ExpenseClassificationService subject =
                 new ExpenseClassificationService(
-                        classifier, merchantRepository, merchantReadModelRepository);
+                        classifier, merchantRepository, merchantReadModelRepository,
+                        eventOutboxRepository, objectMapper);
 
         assertThatThrownBy(() -> subject.classify(validTransaction()))
                 .isInstanceOf(TransactionParseException.class)
@@ -103,7 +112,8 @@ class ExpenseClassificationServiceExceptionPathTest {
 
         ExpenseClassificationService subject =
                 new ExpenseClassificationService(
-                        classifier, merchantRepository, merchantReadModelRepository);
+                        classifier, merchantRepository, merchantReadModelRepository,
+                        eventOutboxRepository, objectMapper);
 
         assertThatThrownBy(() -> subject.classify(validTransaction()))
                 .isInstanceOf(UnrecognizedMerchantException.class);
