@@ -8,6 +8,7 @@ import java.util.Optional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.cache.annotation.Cacheable;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -113,6 +114,16 @@ public class ExpenseClassificationService {
         LOG.info("Mongo miss for id={}, falling back to JPA", id);
         return merchantRepository.findById(id)
                 .map(m -> toReadModel(m, deriveMccCode(m, null)));
+    }
+
+    @Transactional(readOnly = true)
+    public List<MerchantReadModel> findLatest(int limit) {
+        if (limit <= 0) {
+            return List.of();
+        }
+        LOG.info("loading latest merchants limit={}", limit);
+        return merchantReadModelRepository
+                .findAllByOrderByCreatedAtDesc(PageRequest.of(0, limit));
     }
 
     private static Merchant buildMerchantFrom(Transaction transaction) {
