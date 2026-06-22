@@ -57,12 +57,26 @@ spring:
     listener:
       ack-mode: RECORD
   ai:
+    anthropic:
+      api-key: ${ANTHROPIC_API_KEY:dummy}
+      chat:
+        options:
+          model: claude-sonnet-4-5
+          max-tokens: 1024
     mcp:
       server:
         name: expense-mcp
         version: 1.0.0
         type: SYNC
         transport: SSE
+  graphql:
+    path: /graphql
+    graphiql:
+      enabled: true
+      path: /graphiql
+    schema:
+      printer:
+        enabled: true
 
 management:
   endpoints:
