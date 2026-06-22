@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "expense-mcp": {
+      "command": "java",
+      "args": ["-jar", "build/libs/expense-0.0.1-SNAPSHOT.jar"]
+    }
+  }
+}

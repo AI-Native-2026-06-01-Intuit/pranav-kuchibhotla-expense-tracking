@@ -18,9 +18,11 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.uptimecrew.expense.entity.Merchant;
 import com.uptimecrew.expense.model.Transaction;
 import com.uptimecrew.expense.model.TransactionKind;
+import com.uptimecrew.expense.outbox.EventOutboxRepository;
 import com.uptimecrew.expense.readmodel.MerchantReadModel;
 import com.uptimecrew.expense.readmodel.MerchantReadModelRepository;
 import com.uptimecrew.expense.repository.MerchantRepository;
@@ -36,6 +38,11 @@ class ExpenseClassificationServiceMockitoTest {
 
     @Mock
     private MerchantReadModelRepository merchantReadModelRepository;
+
+    @Mock
+    private EventOutboxRepository eventOutboxRepository;
+
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Test
     void classify_validTransaction_delegatesToInjectedClassifier() {
@@ -55,7 +62,8 @@ class ExpenseClassificationServiceMockitoTest {
 
         ExpenseClassificationService subject =
                 new ExpenseClassificationService(
-                        classifier, merchantRepository, merchantReadModelRepository);
+                        classifier, merchantRepository, merchantReadModelRepository,
+                        eventOutboxRepository, objectMapper);
 
         TransactionKind result = subject.classify(transaction);
 
@@ -81,7 +89,8 @@ class ExpenseClassificationServiceMockitoTest {
                 .thenReturn(Optional.of(doc));
 
         ExpenseClassificationService subject = new ExpenseClassificationService(
-                classifier, merchantRepository, merchantReadModelRepository);
+                classifier, merchantRepository, merchantReadModelRepository,
+                eventOutboxRepository, objectMapper);
 
         Optional<MerchantReadModel> result = subject.findById("merchant-office depot");
 
@@ -99,7 +108,8 @@ class ExpenseClassificationServiceMockitoTest {
                 .thenReturn(Optional.of(jpaMerchant));
 
         ExpenseClassificationService subject = new ExpenseClassificationService(
-                classifier, merchantRepository, merchantReadModelRepository);
+                classifier, merchantRepository, merchantReadModelRepository,
+                eventOutboxRepository, objectMapper);
 
         Optional<MerchantReadModel> result = subject.findById("merchant-office depot");
 
@@ -120,7 +130,8 @@ class ExpenseClassificationServiceMockitoTest {
                 .thenReturn(Optional.empty());
 
         ExpenseClassificationService subject = new ExpenseClassificationService(
-                classifier, merchantRepository, merchantReadModelRepository);
+                classifier, merchantRepository, merchantReadModelRepository,
+                eventOutboxRepository, objectMapper);
 
         assertThat(subject.findById("missing")).isEmpty();
     }

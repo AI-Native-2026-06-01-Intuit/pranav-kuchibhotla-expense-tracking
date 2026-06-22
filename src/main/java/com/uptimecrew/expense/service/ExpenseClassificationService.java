@@ -11,11 +11,16 @@ import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.uptimecrew.expense.consumer.MerchantClassifiedEvent;
 import com.uptimecrew.expense.entity.Merchant;
 import com.uptimecrew.expense.entity.MerchantTransaction;
 import com.uptimecrew.expense.exception.ExpenseClassificationException;
 import com.uptimecrew.expense.model.Transaction;
 import com.uptimecrew.expense.model.TransactionKind;
+import com.uptimecrew.expense.outbox.EventOutboxEntity;
+import com.uptimecrew.expense.outbox.EventOutboxRepository;
 import com.uptimecrew.expense.readmodel.MerchantReadModel;
 import com.uptimecrew.expense.readmodel.MerchantReadModel.EmbeddedTransaction;
 import com.uptimecrew.expense.readmodel.MerchantReadModelRepository;
@@ -28,20 +33,28 @@ import com.uptimecrew.expense.repository.MerchantRepository;
 public class ExpenseClassificationService {
 
     public static final String CACHE_NAME = "expense.byId";
+    private static final String MERCHANTS_TOPIC = "merchants.events";
 
     private static final Logger LOG = LoggerFactory.getLogger(ExpenseClassificationService.class);
 
     private final TransactionClassifier classifier;
     private final MerchantRepository merchantRepository;
     private final MerchantReadModelRepository merchantReadModelRepository;
+    private final EventOutboxRepository eventOutboxRepository;
+    private final ObjectMapper objectMapper;
 
     public ExpenseClassificationService(TransactionClassifier classifier,
                                         MerchantRepository merchantRepository,
-                                        MerchantReadModelRepository merchantReadModelRepository) {
+                                        MerchantReadModelRepository merchantReadModelRepository,
+                                        EventOutboxRepository eventOutboxRepository,
+                                        ObjectMapper objectMapper) {
         this.classifier = Objects.requireNonNull(classifier, "classifier must not be null");
         this.merchantRepository = Objects.requireNonNull(merchantRepository, "merchantRepository must not be null");
         this.merchantReadModelRepository = Objects.requireNonNull(
                 merchantReadModelRepository, "merchantReadModelRepository must not be null");
+        this.eventOutboxRepository = Objects.requireNonNull(
+                eventOutboxRepository, "eventOutboxRepository must not be null");
+        this.objectMapper = Objects.requireNonNull(objectMapper, "objectMapper must not be null");
     }
 
     @Transactional
@@ -61,6 +74,23 @@ public class ExpenseClassificationService {
             merchantReadModelRepository.save(projection);
             LOG.info("wrote merchant read model id={} mccCode={}",
                     projection.getId(), projection.getMccCode());
+
+            MerchantClassifiedEvent event = new MerchantClassifiedEvent(
+                    saved.getId(),
+                    saved.getDisplayName(),
+                    saved.getNormalizedName(),
+                    projection.getMccCode(),
+                    kind.name());
+            String payload;
+            try {
+                payload = objectMapper.writeValueAsString(event);
+            } catch (JsonProcessingException ex) {
+                throw new IllegalStateException(
+                        "failed to serialize MerchantClassifiedEvent for outbox", ex);
+            }
+            eventOutboxRepository.save(
+                    new EventOutboxEntity(saved.getId(), MERCHANTS_TOPIC, payload));
+            LOG.info("wrote outbox row aggregateId={} topic={}", saved.getId(), MERCHANTS_TOPIC);
 
             return kind;
         } catch (ExpenseClassificationException ex) {

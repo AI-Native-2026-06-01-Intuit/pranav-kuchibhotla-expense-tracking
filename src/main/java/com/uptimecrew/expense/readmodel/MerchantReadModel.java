@@ -9,6 +9,8 @@ import org.springframework.data.annotation.Id;
 import org.springframework.data.mongodb.core.index.Indexed;
 import org.springframework.data.mongodb.core.mapping.Document;
 
+import com.uptimecrew.expense.consumer.MerchantClassifiedEvent;
+
 /**
  * Denormalized MongoDB read model that mirrors the JPA
  * {@code Merchant} aggregate. Unlike the JPA entity — which lazy-loads
@@ -39,6 +41,16 @@ public final class MerchantReadModel implements Serializable {
     private List<EmbeddedTransaction> transactions;
 
     public MerchantReadModel() {
+    }
+
+    /**
+     * Single-arg constructor used by the Kafka consumer when an event
+     * arrives for an aggregate id that has no existing document yet.
+     * The remaining fields are populated by {@link #applyEvent}.
+     */
+    public MerchantReadModel(String id) {
+        this.id = id;
+        this.transactions = new ArrayList<>();
     }
 
     public MerchantReadModel(String id,
@@ -83,6 +95,19 @@ public final class MerchantReadModel implements Serializable {
 
     public List<EmbeddedTransaction> getTransactions() {
         return transactions;
+    }
+
+    /**
+     * Apply a {@link MerchantClassifiedEvent} to this document. Idempotent:
+     * applying the same event twice yields the same field values, since each
+     * assignment overwrites with the event's value rather than appending.
+     */
+    public void applyEvent(MerchantClassifiedEvent event) {
+        this.id = event.aggregateId();
+        this.displayName = event.displayName();
+        this.normalizedName = event.normalizedName();
+        this.mccCode = event.mccCode();
+        this.merchantKind = event.classificationKind();
     }
 
     public static final class EmbeddedTransaction implements Serializable {
