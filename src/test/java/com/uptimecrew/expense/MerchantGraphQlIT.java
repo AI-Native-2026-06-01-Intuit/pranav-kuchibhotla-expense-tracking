@@ -2,7 +2,9 @@ package com.uptimecrew.expense;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.BDDMockito.given;
+import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import java.io.InputStream;
 import java.math.BigDecimal;
@@ -20,14 +22,18 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.boot.test.autoconfigure.graphql.tester.AutoConfigureHttpGraphQlTester;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Import;
+import org.springframework.context.annotation.Primary;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.graphql.test.tester.HttpGraphQlTester;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.ActiveProfiles;
-import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.MongoDBContainer;
 import org.testcontainers.containers.PostgreSQLContainer;
@@ -41,7 +47,6 @@ import com.networknt.schema.JsonSchemaFactory;
 import com.networknt.schema.SpecVersion;
 import com.networknt.schema.ValidationMessage;
 import com.uptimecrew.expense.graphql.MerchantSummary;
-import com.uptimecrew.expense.llm.LlmSummaryService;
 import com.uptimecrew.expense.readmodel.MerchantReadModel;
 import com.uptimecrew.expense.readmodel.MerchantReadModel.EmbeddedTransaction;
 import com.uptimecrew.expense.readmodel.MerchantReadModelRepository;
@@ -50,8 +55,12 @@ import com.uptimecrew.expense.readmodel.MerchantReadModelRepository;
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @AutoConfigureHttpGraphQlTester
 @ActiveProfiles("test")
+@Import(MerchantGraphQlIT.StubChatClientConfig.class)
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 class MerchantGraphQlIT {
+
+    static final MerchantSummary STUB_SUMMARY =
+            new MerchantSummary("5812", 42.50, 3, "MEALS");
 
     @Container
     @ServiceConnection
@@ -74,9 +83,6 @@ class MerchantGraphQlIT {
 
     @Autowired
     ObjectMapper objectMapper;
-
-    @MockitoBean
-    LlmSummaryService llmSummaryService;
 
     @BeforeAll
     static void applyPostgresSchema() throws Exception {
@@ -150,9 +156,6 @@ class MerchantGraphQlIT {
 
     @Test
     void summarizeMerchant_returnsStructuredOutput_andMatchesSchema() throws Exception {
-        MerchantSummary stub = new MerchantSummary("5812", 42.50, 3, "MEALS");
-        given(llmSummaryService.summarize(anyString())).willReturn(stub);
-
         MerchantSummary response = graphQlTester.document("""
                 mutation {
                   summarizeMerchant(id: "seeded-id-1") {
@@ -221,4 +224,23 @@ class MerchantGraphQlIT {
 
     record MerchantProjection(String id, List<LineProjection> lines) {}
     record LineProjection(String id, String description, Double amount) {}
+
+    // Replaces the auto-configured Anthropic ChatClient.Builder so the real
+    // LlmSummaryService runs end-to-end (prompt build + JSON Schema gate)
+    // without contacting Anthropic. Deep-stubs the fluent chain so
+    // chatClient.prompt().user(...).call().entity(MerchantSummary.class)
+    // resolves to the deterministic STUB_SUMMARY.
+    @TestConfiguration
+    static class StubChatClientConfig {
+        @Bean
+        @Primary
+        ChatClient.Builder stubChatClientBuilder() {
+            ChatClient client = mock(ChatClient.class, RETURNS_DEEP_STUBS);
+            when(client.prompt().user(anyString()).call().entity(MerchantSummary.class))
+                    .thenReturn(STUB_SUMMARY);
+            ChatClient.Builder builder = mock(ChatClient.Builder.class);
+            when(builder.build()).thenReturn(client);
+            return builder;
+        }
+    }
 }
