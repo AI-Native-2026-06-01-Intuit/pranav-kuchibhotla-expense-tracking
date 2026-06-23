@@ -1,0 +1,26 @@
+type Query {
+  merchant(id: ID!): Merchant
+  latestMerchants(limit: Int = 10): [Merchant!]!
+}
+
+type Mutation {
+  summarizeMerchant(id: ID!): MerchantSummary!
+}
+
+type Merchant {
+  id: ID!
+  lines: [LineItem!]!
+}
+
+type LineItem {
+  id: ID!
+  description: String!
+  amount: Float!
+}
+
+type MerchantSummary {
+  mccCode: String!
+  totalSpend: Float!
+  transactionCount: Int!
+  primaryCategory: String!
+}

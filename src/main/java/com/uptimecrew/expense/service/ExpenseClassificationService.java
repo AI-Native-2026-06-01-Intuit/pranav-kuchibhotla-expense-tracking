@@ -1,13 +1,16 @@
 package com.uptimecrew.expense.service;
 
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.cache.annotation.Cacheable;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -17,6 +20,7 @@ import com.uptimecrew.expense.consumer.MerchantClassifiedEvent;
 import com.uptimecrew.expense.entity.Merchant;
 import com.uptimecrew.expense.entity.MerchantTransaction;
 import com.uptimecrew.expense.exception.ExpenseClassificationException;
+import com.uptimecrew.expense.graphql.LineItem;
 import com.uptimecrew.expense.model.Transaction;
 import com.uptimecrew.expense.model.TransactionKind;
 import com.uptimecrew.expense.outbox.EventOutboxEntity;
@@ -113,6 +117,42 @@ public class ExpenseClassificationService {
         LOG.info("Mongo miss for id={}, falling back to JPA", id);
         return merchantRepository.findById(id)
                 .map(m -> toReadModel(m, deriveMccCode(m, null)));
+    }
+
+    @Transactional(readOnly = true)
+    public List<MerchantReadModel> findLatest(int limit) {
+        if (limit <= 0) {
+            return List.of();
+        }
+        LOG.info("loading latest merchants limit={}", limit);
+        return merchantReadModelRepository
+                .findAllByOrderByCreatedAtDesc(PageRequest.of(0, limit));
+    }
+
+    // Batch loader for GraphQL Merchant.lines. The Mongo read model already
+    // embeds the merchant's transactions, so this resolves all parents from
+    // in-memory state in a single pass — no per-parent query, no N+1.
+    public Map<MerchantReadModel, List<LineItem>> loadLineItemsByParent(
+            List<MerchantReadModel> parents) {
+        Objects.requireNonNull(parents, "parents");
+        LOG.info("batch loading line items for {} merchant(s)", parents.size());
+        Map<MerchantReadModel, List<LineItem>> result = new LinkedHashMap<>(parents.size());
+        for (MerchantReadModel parent : parents) {
+            List<EmbeddedTransaction> txs = parent.getTransactions();
+            List<LineItem> lines = txs.isEmpty()
+                    ? List.of()
+                    : txs.stream().map(ExpenseClassificationService::toLineItem).toList();
+            result.put(parent, lines);
+        }
+        return result;
+    }
+
+    private static LineItem toLineItem(EmbeddedTransaction tx) {
+        String description = tx.getTransactionKind() != null
+                ? tx.getTransactionKind()
+                : "transaction";
+        double amount = tx.getAmount() != null ? tx.getAmount().doubleValue() : 0.0;
+        return new LineItem(tx.getId(), description, amount);
     }
 
     private static Merchant buildMerchantFrom(Transaction transaction) {
