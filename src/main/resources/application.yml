@@ -110,6 +110,21 @@ resilience4j:
         waitDurationInOpenState: 10s
         permittedNumberOfCallsInHalfOpenState: 3
 
+otel:
+  service:
+    name: expense-service
+  exporter:
+    otlp:
+      endpoint: http://localhost:4318
+      protocol: http/protobuf
+  traces:
+    sampler: always_on
+  instrumentation:
+    spring-kafka:
+      enabled: true
+    kafka:
+      enabled: true
+
 ---
 spring:
   config:
@@ -135,3 +150,17 @@ management:
 logging:
   level:
     com.uptimecrew.expense: INFO
+
+otel:
+  traces:
+    exporter: none
+    sampler: always_off
+  metrics:
+    exporter: none
+  logs:
+    exporter: none
+  instrumentation:
+    spring-kafka:
+      enabled: false
+    kafka:
+      enabled: false
