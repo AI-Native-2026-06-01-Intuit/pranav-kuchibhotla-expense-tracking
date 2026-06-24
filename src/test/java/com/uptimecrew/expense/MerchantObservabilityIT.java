@@ -111,6 +111,16 @@ class MerchantObservabilityIT {
     static final KafkaContainer KAFKA =
             new KafkaContainer(DockerImageName.parse("confluentinc/cp-kafka:7.6.0"));
 
+    // Jaeger rounds out the observability stack the way a real environment would
+    // (OTLP receiver + UI on 16686). InMemorySpanExporter wired by
+    // ObservabilityTestConfig remains the source of truth for span assertions;
+    // we do not query Jaeger from the tests.
+    @Container
+    static final GenericContainer<?> JAEGER =
+            new GenericContainer<>("jaegertracing/all-in-one:1.62.0")
+                    .withEnv("COLLECTOR_OTLP_ENABLED", "true")
+                    .withExposedPorts(16686, 4318);
+
     @DynamicPropertySource
     static void kafkaProps(DynamicPropertyRegistry registry) {
         registry.add("spring.kafka.bootstrap-servers", KAFKA::getBootstrapServers);

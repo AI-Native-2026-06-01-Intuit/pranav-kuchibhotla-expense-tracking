@@ -112,7 +112,7 @@ resilience4j:
 
 otel:
   service:
-    name: expense-service
+    name: expenseservice
   exporter:
     otlp:
       endpoint: http://localhost:4318
