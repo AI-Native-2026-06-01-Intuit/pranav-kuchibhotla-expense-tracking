@@ -130,6 +130,14 @@ class MerchantGraphQlIT {
     }
 
     @Test
+    void query_merchant_observabilityLabel_matchesSeededMcc() {
+        graphQlTester.document("query { merchant(id: \"seeded-id-1\") { observabilityLabel } }")
+                .execute()
+                .path("merchant.observabilityLabel").entity(String.class)
+                .isEqualTo("merchant:seeded-id-1:mcc:5812");
+    }
+
+    @Test
     void batchMapping_resolves_lines_inOneRound() {
         List<MerchantProjection> merchants = graphQlTester.document("""
                 query {

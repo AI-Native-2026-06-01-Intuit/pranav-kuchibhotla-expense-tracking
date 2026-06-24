@@ -10,6 +10,7 @@ import org.springframework.graphql.data.method.annotation.Argument;
 import org.springframework.graphql.data.method.annotation.BatchMapping;
 import org.springframework.graphql.data.method.annotation.MutationMapping;
 import org.springframework.graphql.data.method.annotation.QueryMapping;
+import org.springframework.graphql.data.method.annotation.SchemaMapping;
 import org.springframework.stereotype.Controller;
 
 import com.uptimecrew.expense.llm.LlmSummaryService;
@@ -56,5 +57,12 @@ public class MerchantGraphQlController {
     public Map<MerchantReadModel, List<LineItem>> lines(List<MerchantReadModel> parents) {
         LOG.info("graphql batch lines for {} merchant(s)", parents.size());
         return classificationService.loadLineItemsByParent(parents);
+    }
+
+    @SchemaMapping(typeName = "Merchant", field = "observabilityLabel")
+    public String observabilityLabel(MerchantReadModel merchant) {
+        String mcc = merchant.getMccCode();
+        String safeMcc = (mcc == null || mcc.isBlank()) ? "unknown" : mcc;
+        return "merchant:" + merchant.getId() + ":mcc:" + safeMcc;
     }
 }
