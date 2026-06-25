@@ -5,9 +5,7 @@ import { useMerchantFilterStore } from '../stores/useMerchantFilterStore';
 
 describe('useDebouncedSearch', () => {
   beforeEach(() => {
-    if (typeof window !== 'undefined' && window.localStorage !== undefined) {
-      window.localStorage.clear();
-    }
+    window.localStorage.clear();
     useMerchantFilterStore.setState(
       useMerchantFilterStore.getInitialState(),
       true,
