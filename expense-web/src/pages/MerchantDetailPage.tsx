@@ -1,4 +1,4 @@
-import { useEffect, useReducer } from 'react';
+import { useEffect, useReducer, useState } from 'react';
 import ThresholdSlider from '../components/ThresholdSlider';
 import ThresholdReadout from '../components/ThresholdReadout';
 import FilterStrip from '../components/FilterStrip';
@@ -29,6 +29,11 @@ const isMerchant = (value: unknown): value is Merchant =>
 const MerchantDetailPage = () => {
   const [state, dispatch] = useReducer(detailReducer, INITIAL_DETAIL_STATE);
   const debouncedSearch = useDebouncedSearch();
+  const [shouldThrow, setShouldThrow] = useState<boolean>(false);
+
+  if (shouldThrow) {
+    throw new Error('Dev-only merchant detail error');
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -98,6 +103,11 @@ const MerchantDetailPage = () => {
       </ul>
       <ThresholdSlider />
       <ThresholdReadout />
+      {import.meta.env.DEV && (
+        <button onClick={() => { setShouldThrow(true); }}>
+          Trigger error
+        </button>
+      )}
     </section>
   );
 };
