@@ -1,0 +1,10 @@
+{
+  "id": "stub-id-1",
+  "mccCode": "5943",
+  "transactionCount": 47,
+  "totalSpend": "3120.50",
+  "lines": [
+    { "id": "line-1", "amount": "100.00" },
+    { "id": "line-2", "amount": "250.00" }
+  ]
+}
