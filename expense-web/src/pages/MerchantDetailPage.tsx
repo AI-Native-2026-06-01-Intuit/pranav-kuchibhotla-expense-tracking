@@ -1,10 +1,9 @@
-import { useState } from 'react';
 import { useMerchant } from '../hooks/useMerchant';
 import ThresholdSlider from '../components/ThresholdSlider';
 import ThresholdReadout from '../components/ThresholdReadout';
+import FilterStrip from '../components/FilterStrip';
 
 const MerchantDetailPage = () => {
-  const [threshold, setThreshold] = useState<number>(50);
   const { data, loading, error } = useMerchant('stub-id-1');
 
   if (loading) {
@@ -19,6 +18,7 @@ const MerchantDetailPage = () => {
 
   return (
     <section>
+      <FilterStrip />
       <h1>Merchant {data.id}</h1>
       <dl>
         <dt>MCC code</dt>
@@ -36,8 +36,8 @@ const MerchantDetailPage = () => {
           </li>
         ))}
       </ul>
-      <ThresholdSlider value={threshold} onChange={setThreshold} />
-      <ThresholdReadout value={threshold} />
+      <ThresholdSlider />
+      <ThresholdReadout />
     </section>
   );
 };

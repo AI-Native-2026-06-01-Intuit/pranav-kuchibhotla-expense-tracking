@@ -1,16 +1,15 @@
 import type { KeyboardEvent } from 'react';
-
-interface ThresholdSliderProps {
-  readonly value: number;
-  readonly onChange: (next: number) => void;
-}
+import { useMerchantFilterStore } from '../stores/useMerchantFilterStore';
 
 const MIN = 0;
 const MAX = 100;
 
 const clamp = (n: number): number => Math.min(MAX, Math.max(MIN, n));
 
-const ThresholdSlider = ({ value, onChange }: ThresholdSliderProps) => {
+const ThresholdSlider = () => {
+  const value = useMerchantFilterStore((s) => s.threshold);
+  const onChange = useMerchantFilterStore((s) => s.setThreshold);
+
   const handleKeyDown = (e: KeyboardEvent<HTMLInputElement>): void => {
     let next: number | null = null;
     switch (e.key) {
