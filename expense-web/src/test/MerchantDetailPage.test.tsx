@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import MerchantDetailPage from '../pages/MerchantDetailPage';
+import { useMerchantFilterStore } from '../stores/useMerchantFilterStore';
 
 const merchantStub = {
   id: 'stub-id-1',
@@ -30,6 +31,11 @@ const stubFetch = () => {
 
 describe('MerchantDetailPage', () => {
   beforeEach(() => {
+    window.localStorage.clear();
+    useMerchantFilterStore.setState(
+      useMerchantFilterStore.getInitialState(),
+      true,
+    );
     stubFetch();
   });
 

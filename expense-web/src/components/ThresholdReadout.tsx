@@ -1,9 +1,8 @@
-interface ThresholdReadoutProps {
-  readonly value: number;
-}
+import { useMerchantFilterStore } from '../stores/useMerchantFilterStore';
 
-const ThresholdReadout = ({ value }: ThresholdReadoutProps) => {
-  return <p role="status">Threshold: {value}%</p>;
+const ThresholdReadout = () => {
+  const threshold = useMerchantFilterStore((s) => s.threshold);
+  return <p role="status">Threshold: {threshold}%</p>;
 };
 
 export default ThresholdReadout;
