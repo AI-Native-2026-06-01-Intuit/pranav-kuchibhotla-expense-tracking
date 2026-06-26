@@ -14,6 +14,9 @@ const config: CodegenConfig = {
   generates: {
     'src/gql/generated/': {
       preset: 'client',
+      config: {
+        useTypeImports: true,
+      },
     },
   },
 };

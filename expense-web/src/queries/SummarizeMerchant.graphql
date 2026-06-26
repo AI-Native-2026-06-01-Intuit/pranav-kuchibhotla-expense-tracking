@@ -1,0 +1,8 @@
+mutation SummarizeMerchant($id: ID!) {
+  summarizeMerchant(id: $id) {
+    id
+    summaryText
+    confidence
+    __typename
+  }
+}

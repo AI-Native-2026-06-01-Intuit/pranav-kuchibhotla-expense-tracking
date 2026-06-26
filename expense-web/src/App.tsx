@@ -1,8 +1,12 @@
 import { useEffect, useState } from 'react';
 import MerchantDetailPage from './pages/MerchantDetailPage';
+import MerchantListPage from './pages/MerchantListPage';
+import MerchantSummaryPage from './pages/MerchantSummaryPage';
 import ErrorBoundary from './components/ErrorBoundary';
 
 const MERCHANT_ROUTE = '#/merchants/stub-id-1';
+const MERCHANT_LIST_ROUTE = '#/merchants';
+const MERCHANT_SUMMARY_ROUTE = '#/merchants/stub-id-1/summary';
 
 const App = () => {
   const [hash, setHash] = useState<string>(window.location.hash);
@@ -12,6 +16,14 @@ const App = () => {
     window.addEventListener('hashchange', handler);
     return () => { window.removeEventListener('hashchange', handler); };
   }, []);
+
+  if (hash === MERCHANT_SUMMARY_ROUTE) {
+    return <MerchantSummaryPage />;
+  }
+
+  if (hash === MERCHANT_LIST_ROUTE) {
+    return <MerchantListPage />;
+  }
 
   if (hash === MERCHANT_ROUTE) {
     return (
@@ -34,6 +46,12 @@ const App = () => {
       <h1>Expense Web</h1>
       <p>
         <a href={MERCHANT_ROUTE}>Open merchant stub-id-1</a>
+      </p>
+      <p>
+        <a href={MERCHANT_LIST_ROUTE}>Latest merchants</a>
+      </p>
+      <p>
+        <a href={MERCHANT_SUMMARY_ROUTE}>Summarize stub-id-1</a>
       </p>
     </main>
   );
