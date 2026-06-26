@@ -1,12 +1,12 @@
 import { useMutation } from '@apollo/client';
+import { useParams } from 'react-router-dom';
 import { SummarizeMerchantDocument } from '../gql/generated/graphql';
 
-// react-router-dom is not installed yet (lands in Task 3). Use a stable
-// fallback id so the page is reachable manually for now.
 const DEFAULT_MERCHANT_ID = 'stub-id-1';
 
 const MerchantSummaryPage = () => {
-  const id = DEFAULT_MERCHANT_ID;
+  const { id: paramId } = useParams<{ id: string }>();
+  const id = paramId ?? DEFAULT_MERCHANT_ID;
   const [summarize, { data, loading, error }] = useMutation(SummarizeMerchantDocument);
 
   const onClick = () => {
