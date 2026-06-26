@@ -24,12 +24,19 @@ const MerchantSummaryPage = () => {
   };
 
   const summary = data?.summarizeMerchant;
+  const optimisticPlaceholder = loading && !summary;
 
   return (
     <section aria-label="merchant-summary">
       <h1>Summarize merchant {id}</h1>
       <button onClick={onClick} disabled={loading}>Summarize</button>
       {error && <div role="alert">{error.message}</div>}
+      {optimisticPlaceholder && (
+        <article aria-label="summary-card">
+          <p>...thinking...</p>
+          <small>confidence: MEDIUM</small>
+        </article>
+      )}
       {summary && (
         <article aria-label="summary-card">
           <p>{summary.summaryText}</p>

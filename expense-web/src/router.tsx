@@ -1,4 +1,5 @@
-import { Navigate, Outlet, createBrowserRouter } from 'react-router-dom';
+import { Navigate, Outlet, createBrowserRouter, createMemoryRouter } from 'react-router-dom';
+import type { RouteObject } from 'react-router-dom';
 import LoginPage from './pages/LoginPage';
 import MerchantListPage from './pages/MerchantListPage';
 import MerchantDetailPage from './pages/MerchantDetailPage';
@@ -14,7 +15,7 @@ export const ProtectedLayout = () => {
   return <Outlet />;
 };
 
-export const router = createBrowserRouter([
+export const routes: RouteObject[] = [
   { path: '/login', element: <LoginPage /> },
   {
     element: <ProtectedLayout />,
@@ -25,4 +26,9 @@ export const router = createBrowserRouter([
       { path: '/merchants/:id/summary', element: <MerchantSummaryPage /> },
     ],
   },
-]);
+];
+
+export const router = createBrowserRouter(routes);
+
+export const createAppRouter = (initialEntries: string[]) =>
+  createMemoryRouter(routes, { initialEntries });
