@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { streamText, type CoreMessage } from 'ai';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { z } from 'zod';
+import { merchantTools } from './chat-tools';
 
 // Threat model / buffering:
 // This proxy holds the upstream provider details (baseURL, model id, and any
@@ -15,9 +16,12 @@ const provider = createOpenAICompatible({
   baseURL: 'http://localhost:8080/ai',
 });
 
-const SYSTEM_PROMPT =
-  'You are an assistant that helps engineers categorise merchant expenses. ' +
-  'When asked about a merchant, answer clearly and concisely.';
+const SYSTEM_PROMPT = [
+  'You are an assistant that helps engineers categorise merchant expenses.',
+  '- When asked about a specific merchant, call the lookupMerchant tool first.',
+  '- When asked whether a charge is deductible, call the classifyDeduction tool.',
+  '- After tool results return, explain them to the engineer clearly and concisely.',
+].join('\n');
 
 const MessageSchema = z.object({
   role: z.enum(['system', 'user', 'assistant']),
@@ -60,6 +64,8 @@ chatRoute.post('/', async (c) => {
       model: provider.chatModel('uptime-crew-assistant'),
       system: SYSTEM_PROMPT,
       messages,
+      tools: merchantTools,
+      maxSteps: 3,
       abortSignal: c.req.raw.signal,
     });
 
