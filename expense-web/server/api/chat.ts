@@ -28,10 +28,23 @@ const BodySchema = z.object({
   messages: z.array(MessageSchema),
 });
 
+const SSE_HEADERS = {
+  'Content-Type': 'text/event-stream',
+  'Cache-Control': 'no-cache, no-transform',
+  Connection: 'keep-alive',
+  'X-Accel-Buffering': 'no',
+} as const;
+
 export const chatRoute = new Hono();
 
 chatRoute.post('/', async (c) => {
-  const raw: unknown = await c.req.json();
+  let raw: unknown;
+  try {
+    raw = await c.req.json();
+  } catch {
+    return c.json({ error: 'invalid JSON body' }, 400);
+  }
+
   const parsed = BodySchema.safeParse(raw);
   if (!parsed.success) {
     return c.json({ error: 'invalid request body' }, 400);
@@ -42,19 +55,25 @@ chatRoute.post('/', async (c) => {
     content: m.content,
   }));
 
-  const result = streamText({
-    model: provider.chatModel('uptime-crew-assistant'),
-    system: SYSTEM_PROMPT,
-    messages,
-    abortSignal: c.req.raw.signal,
-  });
+  try {
+    const result = streamText({
+      model: provider.chatModel('uptime-crew-assistant'),
+      system: SYSTEM_PROMPT,
+      messages,
+      abortSignal: c.req.raw.signal,
+    });
 
-  return result.toDataStreamResponse({
-    headers: {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache, no-transform',
-      Connection: 'keep-alive',
-      'X-Accel-Buffering': 'no',
-    },
-  });
+    // Successful path: hand the data stream straight to the client. Per-chunk
+    // upstream failures arrive as error frames inside the data stream itself,
+    // which the AI SDK client surfaces via `error` on useChat.
+    return result.toDataStreamResponse({ headers: { ...SSE_HEADERS } });
+  } catch (err) {
+    // Only triggers if streamText setup throws synchronously. A client abort
+    // shows up as an AbortError — don't dress that up as a 502.
+    if (err instanceof Error && err.name === 'AbortError') {
+      return new Response(null, { status: 499 });
+    }
+    const detail = err instanceof Error ? err.message : 'unknown error';
+    return c.json({ error: 'upstream chat failed', detail }, 502);
+  }
 });
