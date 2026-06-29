@@ -61,3 +61,12 @@ AI-assisted prompts that produced shipped code on the `week04/day4/...` branch.
 - **Accepted** counting POSTs with a closure-held `chatCallCount` ref reset in `beforeEach` — simpler than spying on MSW internals.
 - **Modified** the Stop test to assert on observable state (status disappears, Stop becomes disabled) rather than trying to assert "partial text shorter than full reply." That's flaky under happy-dom microtask ordering.
 - **Preserved** "use npm only" through all four tasks. No production code change for tests.
+
+## Local run notes (W4D4)
+
+- **Vite** runs with `npm run dev` (default port 5173).
+- **Hono proxy** runs with `npm run server` (port 3001). Vite forwards `/api/chat` → `localhost:3001`.
+- **Live manual chat** requires the W3D4 Spring AI backend at `http://localhost:8080/ai/chat` (the proxy posts upstream there).
+- **Live merchant list** requires the GraphQL backend at `http://localhost:8080/graphql` (Apollo).
+- If the W3 backend is unavailable, the app may show **"Failed to fetch"** in the browser. That is expected manually — there is no offline mock layer in dev. MSW-backed tests still cover the streaming and data-layer contracts locally (`npm test`).
+- **Manual fallback for verifying the UI shell only:** sign in at `/login`, then open `/merchants/stub-id-1/chat`. The chat panel renders without a live upstream, but sending will surface a `role="alert"` error until the backend is up.
