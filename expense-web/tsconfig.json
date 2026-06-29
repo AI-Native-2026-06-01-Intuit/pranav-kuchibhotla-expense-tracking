@@ -20,5 +20,5 @@
     "resolveJsonModule": true,
     "esModuleInterop": true
   },
-  "include": ["src", "vite.config.ts", "vitest.config.ts", "eslint.config.js"]
+  "include": ["src", "vite.config.ts", "vitest.config.ts", "eslint.config.js", "codegen.ts"]
 }

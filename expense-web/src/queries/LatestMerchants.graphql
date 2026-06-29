@@ -1,0 +1,8 @@
+query LatestMerchants {
+  latestMerchants(limit: 20) {
+    id
+    name
+    updatedAt
+    __typename
+  }
+}

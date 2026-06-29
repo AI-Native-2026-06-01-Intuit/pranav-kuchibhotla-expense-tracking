@@ -1,4 +1,5 @@
 import '@testing-library/jest-dom';
+import './server';
 
 class MemoryStorage implements Storage {
   private store = new Map<string, string>();
