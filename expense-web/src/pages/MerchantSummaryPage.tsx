@@ -10,7 +10,10 @@ const MerchantSummaryPage = () => {
   const [summarize, { data, loading, error }] = useMutation(SummarizeMerchantDocument);
 
   const onClick = () => {
-    void summarize({
+    // useMutation surfaces the rejection on `error`, but the returned promise
+    // still rejects. Swallow it explicitly so the rejection doesn't leak as
+    // unhandled.
+    summarize({
       variables: { id },
       optimisticResponse: {
         summarizeMerchant: {
@@ -20,7 +23,7 @@ const MerchantSummaryPage = () => {
           confidence: 'MEDIUM',
         },
       },
-    });
+    }).catch(() => undefined);
   };
 
   const summary = data?.summarizeMerchant;

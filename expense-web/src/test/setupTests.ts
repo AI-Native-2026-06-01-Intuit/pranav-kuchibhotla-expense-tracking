@@ -1,5 +1,20 @@
-import '@testing-library/jest-dom';
-import './server';
+import '@testing-library/jest-dom/vitest';
+import { afterAll, afterEach, beforeAll, expect } from 'vitest';
+import { cleanup } from '@testing-library/react';
+import { toHaveNoViolations } from 'jest-axe';
+import { server } from './server';
+
+
+expect.extend(toHaveNoViolations);
+
+declare module '@vitest/expect' {
+  interface Assertion<T> {
+    toHaveNoViolations: () => T;
+  }
+  interface AsymmetricMatchersContaining {
+    toHaveNoViolations: () => unknown;
+  }
+}
 
 class MemoryStorage implements Storage {
   private store = new Map<string, string>();
@@ -47,3 +62,17 @@ const installStorage = (): void => {
 };
 
 installStorage();
+
+beforeAll(() => {
+  server.listen({ onUnhandledRequest: 'error' });
+});
+
+afterEach(() => {
+  cleanup();
+  server.resetHandlers();
+  window.localStorage.clear();
+});
+
+afterAll(() => {
+  server.close();
+});
