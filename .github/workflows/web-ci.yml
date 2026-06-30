@@ -20,7 +20,7 @@ jobs:
           cache: 'npm'
           cache-dependency-path: expense-web/package-lock.json
       - run: npm ci
-      - run: npm run lint
-      - run: npm run typecheck
-      - run: npm test
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+      - run: npm run check
       - run: npm run build

@@ -51,23 +51,25 @@ const MerchantChatPanel = () => {
   return (
     <section aria-label="merchant-chat">
       <h1>Chat about merchant {id}</h1>
-      <ul role="log" aria-label="chat-transcript" aria-live="polite">
-        {messages.map((message) => {
-          const invocations = (message.toolInvocations ??
-            []) as ToolInvocationLike[];
-          return (
-            <li key={message.id} data-role={message.role}>
-              <strong>{message.role}:</strong> {message.content}
-              {invocations.map((inv, idx) => (
-                <ToolCallCard
-                  key={inv.toolCallId ?? `${message.id}:${idx.toString()}`}
-                  invocation={inv}
-                />
-              ))}
-            </li>
-          );
-        })}
-      </ul>
+      <div role="log" aria-label="chat-transcript" aria-live="polite">
+        <ul>
+          {messages.map((message) => {
+            const invocations = (message.toolInvocations ??
+              []) as ToolInvocationLike[];
+            return (
+              <li key={message.id} data-role={message.role}>
+                <strong>{message.role}:</strong> {message.content}
+                {invocations.map((inv, idx) => (
+                  <ToolCallCard
+                    key={inv.toolCallId ?? `${message.id}:${idx.toString()}`}
+                    invocation={inv}
+                  />
+                ))}
+              </li>
+            );
+          })}
+        </ul>
+      </div>
       <div ref={endRef} />
       {isLoading && <div role="status">Assistant is replying…</div>}
       {error && <div role="alert">Error: {error.message}</div>}

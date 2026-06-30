@@ -4,7 +4,7 @@ import { screen, waitFor } from '@testing-library/react';
 import { Route, Routes } from 'react-router-dom';
 import MerchantSummaryPage from '../pages/MerchantSummaryPage';
 import { server } from './server';
-import { summarizeMerchantError } from './handlers';
+import { summarizeMerchantError, summarizeMerchantHappy } from './handlers';
 import { renderWithApolloHttp } from './renderWithApolloHttp';
 
 const MERCHANT_ID = 'stub-1';
@@ -23,6 +23,10 @@ const renderPage = () =>
 
 describe('MerchantSummaryPage (integration via MSW + HttpLink)', () => {
   it('shows the optimistic "...thinking..." placeholder while the real MSW response is in flight', async () => {
+    // Slower MSW response so the optimistic placeholder is observable
+    // before Apollo swaps in the real result. Default is 50ms which can
+    // race with React batching under full parallel runs.
+    server.use(summarizeMerchantHappy(200));
     const { user } = renderPage();
     await user.click(screen.getByRole('button', { name: /summarize/i }));
     expect(await screen.findByText('...thinking...')).toBeInTheDocument();

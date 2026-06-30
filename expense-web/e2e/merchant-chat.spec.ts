@@ -1,4 +1,5 @@
 import { test, expect, type Page, type Route } from '@playwright/test';
+import AxeBuilder from '@axe-core/playwright';
 
 const MERCHANT_ID = 'stub-1';
 
@@ -124,6 +125,14 @@ test.describe('merchant chat happy path (E2E)', () => {
     const toolCall = page.getByLabel('tool-call');
     await expect(toolCall).toBeVisible();
     await expect(toolCall).toContainText('lookup_merchant');
+
+    // One axe pass on the fully-populated chat surface. Scoped to the page
+    // root with the wcag2a/wcag2aa tags so we surface only standards-track
+    // violations and don't slow the suite with a second scan.
+    const accessibilityScanResults = await new AxeBuilder({ page })
+      .withTags(['wcag2a', 'wcag2aa'])
+      .analyze();
+    expect(accessibilityScanResults.violations).toEqual([]);
 
     await page.reload();
 
