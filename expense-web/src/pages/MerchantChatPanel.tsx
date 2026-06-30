@@ -15,6 +15,9 @@ const MerchantChatPanel = () => {
   const appendAssistantMessage = useMerchantChatStore(
     (s) => s.appendAssistantMessage,
   );
+  // Read the persisted transcript once on mount so a reload re-hydrates the
+  // assistant history without resubscribing useChat to every store change.
+  const persistedMessagesRef = useRef(useMerchantChatStore.getState().messages);
 
   const {
     messages,
@@ -28,6 +31,7 @@ const MerchantChatPanel = () => {
   } = useChat({
     id: `merchant-${id}`,
     api: '/api/chat',
+    initialMessages: [...persistedMessagesRef.current],
     // onFinish fires once per completed assistant message — the right hook
     // for persistence. We never persist on every token, in render, or by
     // mirroring useChat's full messages array into Zustand.
@@ -47,7 +51,7 @@ const MerchantChatPanel = () => {
   return (
     <section aria-label="merchant-chat">
       <h1>Chat about merchant {id}</h1>
-      <ul aria-label="chat-transcript">
+      <ul role="log" aria-label="chat-transcript" aria-live="polite">
         {messages.map((message) => {
           const invocations = (message.toolInvocations ??
             []) as ToolInvocationLike[];
