@@ -1,4 +1,5 @@
 import { HttpResponse, delay, graphql, http } from 'msw';
+import { sseHandlers } from './sse-handlers';
 
 type SummarizeVars = { id: string };
 
@@ -41,4 +42,6 @@ export const handlers = [
       updatedAt: '2025-01-04T00:00:00Z',
     }),
   ),
+
+  ...sseHandlers,
 ];
