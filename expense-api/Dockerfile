@@ -48,5 +48,11 @@ COPY --from=extractor /extract/spring-boot-loader/    ./
 COPY --from=extractor /extract/snapshot-dependencies/ ./
 COPY --from=extractor /extract/application/           ./
 
+COPY docker/healthcheck /home/nonroot/healthcheck
+
 EXPOSE 8080
+
+HEALTHCHECK --interval=30s --timeout=3s --start-period=30s --retries=3 \
+  CMD ["/home/nonroot/healthcheck"]
+
 ENTRYPOINT ["java","org.springframework.boot.loader.launch.JarLauncher"]
