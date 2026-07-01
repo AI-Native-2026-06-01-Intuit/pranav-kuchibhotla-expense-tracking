@@ -6,3 +6,8 @@ coverage
 .vite
 .DS_Store
 *.log
+
+# Playwright
+e2e/.auth/
+playwright-report/
+test-results/

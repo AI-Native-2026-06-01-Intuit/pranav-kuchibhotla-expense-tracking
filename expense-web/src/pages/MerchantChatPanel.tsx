@@ -15,6 +15,9 @@ const MerchantChatPanel = () => {
   const appendAssistantMessage = useMerchantChatStore(
     (s) => s.appendAssistantMessage,
   );
+  // Read the persisted transcript once on mount so a reload re-hydrates the
+  // assistant history without resubscribing useChat to every store change.
+  const persistedMessagesRef = useRef(useMerchantChatStore.getState().messages);
 
   const {
     messages,
@@ -28,6 +31,7 @@ const MerchantChatPanel = () => {
   } = useChat({
     id: `merchant-${id}`,
     api: '/api/chat',
+    initialMessages: [...persistedMessagesRef.current],
     // onFinish fires once per completed assistant message — the right hook
     // for persistence. We never persist on every token, in render, or by
     // mirroring useChat's full messages array into Zustand.
@@ -47,23 +51,25 @@ const MerchantChatPanel = () => {
   return (
     <section aria-label="merchant-chat">
       <h1>Chat about merchant {id}</h1>
-      <ul aria-label="chat-transcript">
-        {messages.map((message) => {
-          const invocations = (message.toolInvocations ??
-            []) as ToolInvocationLike[];
-          return (
-            <li key={message.id} data-role={message.role}>
-              <strong>{message.role}:</strong> {message.content}
-              {invocations.map((inv, idx) => (
-                <ToolCallCard
-                  key={inv.toolCallId ?? `${message.id}:${idx.toString()}`}
-                  invocation={inv}
-                />
-              ))}
-            </li>
-          );
-        })}
-      </ul>
+      <div role="log" aria-label="chat-transcript" aria-live="polite">
+        <ul>
+          {messages.map((message) => {
+            const invocations = (message.toolInvocations ??
+              []) as ToolInvocationLike[];
+            return (
+              <li key={message.id} data-role={message.role}>
+                <strong>{message.role}:</strong> {message.content}
+                {invocations.map((inv, idx) => (
+                  <ToolCallCard
+                    key={inv.toolCallId ?? `${message.id}:${idx.toString()}`}
+                    invocation={inv}
+                  />
+                ))}
+              </li>
+            );
+          })}
+        </ul>
+      </div>
       <div ref={endRef} />
       {isLoading && <div role="status">Assistant is replying…</div>}
       {error && <div role="alert">Error: {error.message}</div>}
