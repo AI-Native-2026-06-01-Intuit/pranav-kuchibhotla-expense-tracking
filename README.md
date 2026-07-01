@@ -24,6 +24,8 @@ Root package: `com.uptimecrew.expense`
 
 Requires JDK 17+. Uses the Gradle wrapper.
 
+W5D1 containerizes the backend as the `expense-api` module — see `expense-api/Dockerfile`.
+
 - `./gradlew test` — run tests
 - `./gradlew build` — compile and run tests
 - `./gradlew test --tests "com.uptimecrew.expense.model.ExpenseTest"` — single test class

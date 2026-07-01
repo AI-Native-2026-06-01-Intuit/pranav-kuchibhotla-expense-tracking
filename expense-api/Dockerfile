@@ -7,7 +7,7 @@ WORKDIR /workspace
 # Copy Gradle wrapper + build scripts first so dependency resolution caches.
 COPY gradlew gradlew.bat ./
 COPY gradle ./gradle
-COPY build.gradle settings.gradle ./
+COPY build.gradle ./
 
 RUN chmod +x ./gradlew
 
