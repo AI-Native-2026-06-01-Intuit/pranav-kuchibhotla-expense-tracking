@@ -51,7 +51,7 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Trivy scan (HIGH/CRITICAL, fixed-only, waivers apply)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@master
         with:
           image-ref: uptimecrew/expense-api:ci-${{ github.run_id }}
           severity: HIGH,CRITICAL
