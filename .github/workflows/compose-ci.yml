@@ -25,18 +25,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build local expense-api image expected by compose
-        working-directory: expense-api
+      # Plain `docker build` (no buildx --load): the resulting image lands in
+      # the local daemon under exactly the tag Compose looks for. buildx has
+      # produced silent per-runner mismatches in this repo before.
+      - name: Build expense-api image from this branch
         run: |
-          docker buildx build \
-            --load \
-            --tag uptimecrew/expense-api:0.1.0 \
+          docker build \
             --build-arg APP_VERSION=0.1.0 \
             --build-arg GIT_SHA=${{ github.sha }} \
-            .
+            -t uptimecrew/expense-api:0.1.0 \
+            ./expense-api
+
+      # Prove the image Compose will pick up is the one we just built,
+      # including USER and the baked HEALTHCHECK. Anything unexpected here
+      # would explain every "unhealthy in CI, healthy locally" failure mode.
+      - name: Verify image
+        run: |
+          docker image ls uptimecrew/expense-api
+          docker inspect uptimecrew/expense-api:0.1.0 \
+            --format '{{.Id}} {{.Config.User}} {{.Config.Healthcheck.Test}}'
 
       - name: Seed envs/expense.env from example
         run: cp envs/expense.env.example envs/expense.env
@@ -63,26 +70,95 @@ jobs:
         run: docker compose --env-file envs/expense.env -f compose.yaml config --quiet
 
       - name: Pre-pull datastore images
-        # `docker compose up --wait` starts its wait clock at container-create
-        # time, but on a cold runner the pull of postgres:16 + redis:7 +
-        # apache/kafka:3.7.0 + mongo:7 eats most of that budget before the
-        # API even starts. Pulling here up-front means `--wait` measures
-        # actual startup, not registry latency.
+        # Pull in advance so the readiness loop below measures Spring startup,
+        # not registry latency for postgres/redis/kafka/mongo.
         run: docker compose --env-file envs/expense.env -f compose.yaml pull postgres redis kafka mongo
 
-      - name: Compose up (wait for healthy)
-        # 300s: cold-start of Spring Boot with JPA + Mongo + Redis + Kafka on
-        # a GitHub runner routinely takes 60–90s after the datastores are
-        # already healthy. compose.yaml raises the API healthcheck
-        # start_period to 120s; this timeout must exceed that.
-        run: docker compose --env-file envs/expense.env -f compose.yaml up -d --wait --wait-timeout 300
+      # Deliberately no --wait here. `compose up --wait` exits before we can
+      # attach logs, so an unhealthy API becomes a black-box failure. Start
+      # detached, then poll from bash so every attempt is visible in the log.
+      - name: Compose up (detached, no --wait)
+        run: docker compose --env-file envs/expense.env -f compose.yaml up -d
+
+      - name: Wait for datastores to report healthy
+        run: |
+          set -u
+          services="postgres redis kafka mongo"
+          deadline=$((SECONDS + 180))
+          for svc in $services; do
+            cid="expense_dev-${svc}-1"
+            echo "waiting for $cid to become healthy…"
+            while :; do
+              status=$(docker inspect --format '{{.State.Health.Status}}' "$cid" 2>/dev/null || echo missing)
+              case "$status" in
+                healthy)
+                  echo "  $cid: healthy"
+                  break
+                  ;;
+                starting)
+                  ;;
+                *)
+                  echo "  $cid: state=$status"
+                  ;;
+              esac
+              if [ $SECONDS -ge $deadline ]; then
+                echo "::error::datastore $cid never became healthy (last=$status)"
+                docker compose --env-file envs/expense.env -f compose.yaml ps
+                docker compose --env-file envs/expense.env -f compose.yaml logs --no-color --tail=200 "$svc" || true
+                exit 1
+              fi
+              sleep 3
+            done
+          done
+
+      # Host-side readiness gate: hit the actual HTTP endpoint the smoke test
+      # depends on, print the code + body of every attempt, cap at 300s.
+      # This is the real "is the API ready" question — Docker's healthcheck
+      # only mirrors it and its failures are opaque.
+      - name: Wait for expense-api readiness (host curl)
+        id: readiness
+        run: |
+          set -u
+          url="http://localhost:8080/actuator/health/readiness"
+          deadline=$((SECONDS + 300))
+          attempt=0
+          while :; do
+            attempt=$((attempt + 1))
+            body=$(curl -sS -o /tmp/readiness.body -w '%{http_code}' --max-time 5 "$url" || echo "000")
+            printf '  attempt=%02d code=%s body=%s\n' "$attempt" "$body" "$(cat /tmp/readiness.body 2>/dev/null)"
+            if [ "$body" = "200" ] && grep -q '"status":"UP"' /tmp/readiness.body; then
+              echo "expense-api readiness UP after ${attempt} attempt(s)"
+              exit 0
+            fi
+            if [ $SECONDS -ge $deadline ]; then
+              echo "::error::expense-api readiness never returned status UP within 300s"
+              exit 1
+            fi
+            sleep 3
+          done
+
+      - name: Diagnostics on readiness failure
+        if: failure() && steps.readiness.conclusion == 'failure'
+        run: |
+          echo "===== docker compose ps ====="
+          docker compose --env-file envs/expense.env -f compose.yaml ps || true
+          echo
+          echo "===== docker inspect expense_dev-expense-api-1 .State.Health ====="
+          docker inspect expense_dev-expense-api-1 --format '{{json .State.Health}}' || true
+          echo
+          echo "===== docker compose logs expense-api (tail 300) ====="
+          docker compose --env-file envs/expense.env -f compose.yaml logs --no-color --tail=300 expense-api || true
+          echo
+          echo "===== docker compose logs postgres/redis/kafka/mongo (tail 120) ====="
+          docker compose --env-file envs/expense.env -f compose.yaml logs --no-color --tail=120 postgres redis kafka mongo || true
 
       - name: Show container state
         run: docker compose --env-file envs/expense.env -f compose.yaml ps
 
       - name: Tear down base stack before smoke
-        # The smoke script spins up its own isolated project on a distinct host
-        # port (18080). Freeing 8080 first avoids surprising the smoke stack.
+        # The smoke script spins up its own isolated project on a distinct
+        # host port (18080). Freeing 8080 and freeing RAM first keeps the
+        # runner from thrashing when two full stacks would overlap.
         run: docker compose --env-file envs/expense.env -f compose.yaml down --volumes --remove-orphans
 
       - name: Run smoke test
