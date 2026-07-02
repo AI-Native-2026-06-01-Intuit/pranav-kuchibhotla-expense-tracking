@@ -1,0 +1,36 @@
+# VCS & CI
+.git
+.github
+
+# Build outputs
+build/
+.gradle/
+
+# Frontend & DB assets (not part of the Spring Boot boot jar)
+expense-web/
+db/
+
+# Secrets
+.env
+.env.*
+*.pem
+*.key
+*.p12
+secrets/
+credentials.json
+
+# Node / test artifacts (defensive; not currently at root)
+node_modules
+**/node_modules
+**/coverage
+**/test-results
+playwright-report
+
+# IDE / OS
+.idea
+.vscode
+.DS_Store
+*.iml
+
+# Docs
+docs

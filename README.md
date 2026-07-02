@@ -24,6 +24,8 @@ Root package: `com.uptimecrew.expense`
 
 Requires JDK 17+. Uses the Gradle wrapper.
 
+W5D1 containerizes the backend as the `expense-api` module — see `expense-api/Dockerfile`.
+
 - `./gradlew test` — run tests
 - `./gradlew build` — compile and run tests
 - `./gradlew test --tests "com.uptimecrew.expense.model.ExpenseTest"` — single test class
@@ -127,3 +129,16 @@ Layers Apollo Client, TanStack Query v5, React Router v7, and MSW onto the W4D1/
 - **Prompt:** "JaCoCo check is failing below the 70% branch threshold. Add focused branch-coverage tests without lowering the threshold."
 - **What it suggested:** Claude suggested adding tests for non-monthly cadence, null transaction, empty history, and cadence edge cases.
 - **What I accepted or rejected and why:** I accepted adding behavior-focused tests because they covered real classifier branches and helped the build pass the JaCoCo gate. I rejected lowering the JaCoCo threshold because the assignment explicitly requires a 70% branch coverage gate.
+
+## Week 5 Day 1
+
+W5D1 containerizes expense-api with a multi-stage distroless non-root Docker image and CI scan gate.
+
+### Multi-module Gradle layout note
+
+The Gradle wrapper is intentionally present in **two** locations:
+
+- `./gradlew` + `./gradle/wrapper/` + `./settings.gradle` (which `include`s `expense-api`) — the root wrapper drives the multi-module build from the repo root (`./gradlew build`, `./gradlew :expense-api:bootJar`, `./gradlew :expense-api:test`, etc.).
+- `expense-api/gradlew` + `expense-api/gradle/wrapper/` — used **inside the Docker build**, where the build context is `./expense-api` and the Dockerfile does `COPY gradlew gradlew.bat ./` before running `./gradlew bootJar`. The context-scoped wrapper keeps the build context small and avoids pulling the whole repo into the builder stage.
+
+Both wrappers are pinned to the same Gradle version; refresh them together (`./gradlew wrapper --gradle-version <x>` from the repo root, then `cd expense-api && ../gradlew wrapper --gradle-version <x>`).
