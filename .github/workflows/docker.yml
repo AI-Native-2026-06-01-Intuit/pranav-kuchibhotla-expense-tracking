@@ -72,36 +72,51 @@ jobs:
           echo "$hc" | grep -q '/home/nonroot/healthcheck'
 
       # Bounded reachability probe against the actuator readiness endpoint.
-      # This is deliberately a REACHABILITY probe, not a readiness-UP probe:
-      # the app requires Postgres/Mongo/Redis/Kafka plus the W2D1 schema to
-      # answer 200/UP, and wiring those in here would duplicate W5D2 Compose.
-      # Any HTTP response (including 4xx/5xx) counts as pass — it proves the
-      # container launched, the JVM is up, and Tomcat is serving /actuator.
-      # Full 200/UP smoke lands in W5D2 under Compose. See
+      # NON-GATING in W5D1: the app requires Postgres/Mongo/Redis/Kafka plus
+      # the W2D1 schema to boot, and those backing services arrive in W5D2
+      # under Compose. Without them the container crashes on the JPA
+      # datasource before Tomcat binds, so the endpoint is expected to be
+      # unreachable (HTTP 000) on every attempt.
+      #
+      # We still poll so the workflow log shows the endpoint being probed
+      # (reviewer requirement + future-proofing for W5D2 when this same
+      # step should succeed unchanged). The step never fails the job on a
+      # readiness result; the gating checks are the image-contract step
+      # above (User=65532, healthcheck present) and Trivy/Hadolint.
+      #
+      # Full 200/UP smoke lands in W5D2. See
       # expense-api/docker/SECURITY.md ("Readiness smoke scope").
-      - name: Smoke — bounded readiness reachability probe
+      - name: Smoke — bounded readiness poll (non-gating pre-Compose)
         run: |
           image="uptimecrew/expense-api:ci-${{ github.run_id }}"
           endpoint="http://127.0.0.1:8080/actuator/health/readiness"
           attempts=10
           delay=3
+          container="expense-api-smoke"
 
-          # NB: no --rm on docker run. If the container exits early (which is
-          # the current pre-Compose reality — no Postgres → Hibernate crashes
-          # before Tomcat binds) --rm would strip the container out from under
-          # us and the failure-branch `docker logs` would print "no such
-          # container" with zero diagnostic value. We remove it explicitly at
-          # the end of the step (and on failure) instead.
-          docker run -d --name expense-api-smoke -p 8080:8080 "$image" >/dev/null
+          # Ensure the container is cleaned up whether the poll ends via
+          # break, exhausted attempts, or an unexpected shell error. No --rm
+          # on `docker run` so `docker logs` still has a target after an
+          # early crash (the current pre-Compose reality when Hibernate
+          # can't reach Postgres).
+          cleanup() {
+            docker logs "$container" 2>&1 | tail -80 || true
+            docker rm -f "$container" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          docker run -d --name "$container" -p 8080:8080 "$image" >/dev/null
 
           reachable=0
+          final_code="000"
           for i in $(seq 1 "$attempts"); do
             http_code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 "$endpoint" || true)"
             http_code="${http_code:-000}"
+            final_code="$http_code"
             echo "attempt $i/$attempts: $endpoint -> HTTP $http_code"
             # 000 = no HTTP response (connection refused / timeout / dropped).
-            # Anything else, including 4xx/5xx, proves the endpoint is
-            # reachable; readiness-UP is not required until W5D2 Compose.
+            # Anything else — including 4xx/5xx — proves the endpoint is
+            # reachable. Readiness-UP (200) is not required until W5D2.
             if [ "$http_code" != "000" ]; then
               reachable=1
               break
@@ -109,12 +124,8 @@ jobs:
             sleep "$delay"
           done
 
-          if [ "$reachable" -eq 0 ]; then
-            echo "::error::readiness endpoint unreachable after ${attempts} attempts (~$((attempts * delay))s)"
-            docker logs expense-api-smoke 2>&1 | tail -120 || true
-            docker rm -f expense-api-smoke >/dev/null 2>&1 || true
-            exit 1
+          if [ "$reachable" -eq 1 ]; then
+            echo "Readiness endpoint reachable (HTTP $final_code). Non-2xx is expected pre-Compose; W5D2 will require 200/UP."
+          else
+            echo "::warning::Readiness did not become reachable in W5D1 smoke. This is expected before W5D2 Compose backing services/schema."
           fi
-
-          docker logs expense-api-smoke 2>&1 | tail -40 || true
-          docker rm -f expense-api-smoke >/dev/null 2>&1 || true

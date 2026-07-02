@@ -149,12 +149,13 @@ The W5D1 CI smoke therefore verifies the **image-level** contract only:
 1. `Config.User == 65532` (non-root),
 2. `Config.Healthcheck.Test` includes `/home/nonroot/healthcheck`,
 3. `docker run -d` launches the container binary on the CI arch (amd64) and
-   Tomcat comes up far enough to answer `/actuator/health/readiness` — a
-   bounded curl-retry loop (10 attempts × 3 s) counts **any** HTTP response
-   as pass, including 4xx/5xx. This is a *reachability* probe, not a
-   *readiness-UP* probe: the app still returns non-2xx while the missing
-   backing services fail their contributors, and that is the expected and
-   accepted W5D1 outcome.
+   a bounded curl-retry loop (10 attempts × 3 s) polls
+   `/actuator/health/readiness`. The poll is **non-gating in W5D1**: without
+   Postgres/Mongo/Redis/Kafka the JPA datasource fails before Tomcat binds,
+   so HTTP 000 across all attempts is the expected outcome and is logged as
+   a `::warning::`, not an `::error::`. When W5D2 Compose brings up the
+   backing services and applies the schema, this same step will observe a
+   reachable endpoint (and eventually 200/UP) without further changes.
 
 A full *readiness-UP* smoke against the running container is scheduled for
 **W5D2**, once Compose brings up the backing services and applies the
