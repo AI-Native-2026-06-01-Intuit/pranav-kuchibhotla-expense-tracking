@@ -62,10 +62,20 @@ jobs:
       - name: Validate compose config
         run: docker compose --env-file envs/expense.env -f compose.yaml config --quiet
 
+      - name: Pre-pull datastore images
+        # `docker compose up --wait` starts its wait clock at container-create
+        # time, but on a cold runner the pull of postgres:16 + redis:7 +
+        # apache/kafka:3.7.0 + mongo:7 eats most of that budget before the
+        # API even starts. Pulling here up-front means `--wait` measures
+        # actual startup, not registry latency.
+        run: docker compose --env-file envs/expense.env -f compose.yaml pull postgres redis kafka mongo
+
       - name: Compose up (wait for healthy)
-        # 180s: cold runners still need to pull postgres:16 + redis:7 +
-        # apache/kafka:3.7.0 + mongo:7 before the API's context can refresh.
-        run: docker compose --env-file envs/expense.env -f compose.yaml up -d --wait --wait-timeout 180
+        # 300s: cold-start of Spring Boot with JPA + Mongo + Redis + Kafka on
+        # a GitHub runner routinely takes 60–90s after the datastores are
+        # already healthy. compose.yaml raises the API healthcheck
+        # start_period to 120s; this timeout must exceed that.
+        run: docker compose --env-file envs/expense.env -f compose.yaml up -d --wait --wait-timeout 300
 
       - name: Show container state
         run: docker compose --env-file envs/expense.env -f compose.yaml ps
