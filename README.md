@@ -133,3 +133,12 @@ Layers Apollo Client, TanStack Query v5, React Router v7, and MSW onto the W4D1/
 ## Week 5 Day 1
 
 W5D1 containerizes expense-api with a multi-stage distroless non-root Docker image and CI scan gate.
+
+### Multi-module Gradle layout note
+
+The Gradle wrapper is intentionally present in **two** locations:
+
+- `./gradlew` + `./gradle/wrapper/` + `./settings.gradle` (which `include`s `expense-api`) — the root wrapper drives the multi-module build from the repo root (`./gradlew build`, `./gradlew :expense-api:bootJar`, `./gradlew :expense-api:test`, etc.).
+- `expense-api/gradlew` + `expense-api/gradle/wrapper/` — used **inside the Docker build**, where the build context is `./expense-api` and the Dockerfile does `COPY gradlew gradlew.bat ./` before running `./gradlew bootJar`. The context-scoped wrapper keeps the build context small and avoids pulling the whole repo into the builder stage.
+
+Both wrappers are pinned to the same Gradle version; refresh them together (`./gradlew wrapper --gradle-version <x>` from the repo root, then `cd expense-api && ../gradlew wrapper --gradle-version <x>`).

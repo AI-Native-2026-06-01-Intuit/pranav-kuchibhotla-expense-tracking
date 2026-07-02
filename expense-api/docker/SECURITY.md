@@ -149,9 +149,14 @@ The W5D1 CI smoke therefore verifies the **image-level** contract only:
 1. `Config.User == 65532` (non-root),
 2. `Config.Healthcheck.Test` includes `/home/nonroot/healthcheck`,
 3. `docker run -d` launches the container binary on the CI arch (amd64) and
-   prints startup logs.
+   Tomcat comes up far enough to answer `/actuator/health/readiness` — a
+   bounded curl-retry loop (10 attempts × 3 s) counts **any** HTTP response
+   as pass, including 4xx/5xx. This is a *reachability* probe, not a
+   *readiness-UP* probe: the app still returns non-2xx while the missing
+   backing services fail their contributors, and that is the expected and
+   accepted W5D1 outcome.
 
-A full `curl` readiness smoke against the running container is scheduled for
+A full *readiness-UP* smoke against the running container is scheduled for
 **W5D2**, once Compose brings up the backing services and applies the
 schema. A "smoke-only" fake profile that would let the app boot in
 isolation was intentionally **not** added — it would require app-behavior
