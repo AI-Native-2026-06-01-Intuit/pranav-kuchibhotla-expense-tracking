@@ -1,0 +1,87 @@
+name: expense-api docker
+
+on:
+  pull_request:
+    paths:
+      - 'expense-api/**'
+      - '.github/workflows/docker.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'expense-api/**'
+      - '.github/workflows/docker.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  hadolint:
+    name: hadolint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Hadolint (fail on warning)
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: expense-api/Dockerfile
+          config: expense-api/.hadolint.yaml
+          failure-threshold: warning
+
+  build-scan-smoke:
+    name: build + scan + smoke
+    needs: hadolint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build image (load into local daemon; no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: ./expense-api
+          load: true
+          tags: uptimecrew/expense-api:ci-${{ github.run_id }}
+          build-args: |
+            APP_VERSION=ci-${{ github.run_id }}
+            GIT_SHA=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Trivy scan (HIGH/CRITICAL, fixed-only, waivers apply)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: uptimecrew/expense-api:ci-${{ github.run_id }}
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: '1'
+          trivyignores: expense-api/.trivyignore
+          vuln-type: os,library
+
+      - name: Smoke — image contract (User=65532 + healthcheck present)
+        run: |
+          set -euo pipefail
+          image="uptimecrew/expense-api:ci-${{ github.run_id }}"
+          user="$(docker inspect --format '{{.Config.User}}' "$image")"
+          echo "Config.User=$user"
+          test "$user" = "65532"
+          hc="$(docker inspect --format '{{json .Config.Healthcheck.Test}}' "$image")"
+          echo "Config.Healthcheck.Test=$hc"
+          echo "$hc" | grep -q '/home/nonroot/healthcheck'
+
+      # A full `curl /actuator/health/readiness` smoke is deliberately NOT
+      # performed here. The app requires Postgres/Mongo/Redis/Kafka plus the
+      # W2D1 schema to reach readiness; wiring those into this job would
+      # duplicate W5D2 Compose. See expense-api/docker/SECURITY.md
+      # ("Readiness smoke scope") for the rationale. We start the container
+      # and print startup logs so a reviewer can confirm the binary launches
+      # and the failure mode is the expected "no backing services".
+      - name: Smoke — startup logs (readiness curl deferred to W5D2 compose)
+        run: |
+          image="uptimecrew/expense-api:ci-${{ github.run_id }}"
+          docker run --rm -d --name expense-api-smoke "$image" >/dev/null || true
+          sleep 15
+          docker logs expense-api-smoke 2>&1 | tail -80 || true
+          docker stop expense-api-smoke >/dev/null 2>&1 || true

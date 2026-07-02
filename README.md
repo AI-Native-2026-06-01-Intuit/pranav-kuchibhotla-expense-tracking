@@ -129,3 +129,7 @@ Layers Apollo Client, TanStack Query v5, React Router v7, and MSW onto the W4D1/
 - **Prompt:** "JaCoCo check is failing below the 70% branch threshold. Add focused branch-coverage tests without lowering the threshold."
 - **What it suggested:** Claude suggested adding tests for non-monthly cadence, null transaction, empty history, and cadence edge cases.
 - **What I accepted or rejected and why:** I accepted adding behavior-focused tests because they covered real classifier branches and helped the build pass the JaCoCo gate. I rejected lowering the JaCoCo threshold because the assignment explicitly requires a 70% branch coverage gate.
+
+## Week 5 Day 1
+
+W5D1 containerizes expense-api with a multi-stage distroless non-root Docker image and CI scan gate.

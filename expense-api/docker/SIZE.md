@@ -69,3 +69,25 @@ docker history uptimecrew/expense-api:0.1.0
 
 For the warm-rebuild timing, run the build twice (second run is fully
 cached), or touch one `.java` file and time the third build.
+
+## Task 3 scope note — smoke profile deferred
+
+Task 3 verifies **image-level** hardening: non-root user, HEALTHCHECK
+directive, no baked secrets, small build context, and the presence of a
+cross-architecture (`amd64`/`arm64`) healthcheck binary. All of these are
+confirmed via `docker inspect` on the built image and pass without any
+external dependencies.
+
+A standalone smoke profile that boots the app *without* Postgres, Mongo,
+Redis, and Kafka was intentionally **not** added. The app's bean graph
+has hard, constructor-required dependencies on those services (e.g.,
+`StringRedisTemplate`, `KafkaTemplate`, `MongoRepository` implementations
+consumed by `IdempotencyService`, `OutboxPublisher`, `LlmSummaryService`,
+and `MerchantClassifiedListener`). Making the app boot in isolation would
+require either app-code changes (adding `@Profile("!smoke")` guards) or
+introducing fake beans — both are out of scope for Task 3, which
+explicitly forbids modifying application behavior.
+
+Full end-to-end "container becomes healthy" verification is deferred to
+W5D2, when Compose-managed backing services and a migrated schema become
+available.

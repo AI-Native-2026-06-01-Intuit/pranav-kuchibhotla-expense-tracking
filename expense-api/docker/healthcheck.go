@@ -4,13 +4,17 @@
 // self-contained binary. This program does a single GET against the local
 // Spring Boot actuator readiness endpoint and exits 0 iff the response is 2xx.
 //
-// Build (static, linux/arm64, matches distroless nonroot uid 65532):
+// Build both linux/arm64 (Rancher Desktop on aarch64) and linux/amd64
+// (GitHub Actions ubuntu-22.04). The Dockerfile selects the right one
+// at build time via the BuildKit-provided TARGETARCH.
 //
-//   docker run --rm -v "$PWD":/src -w /src golang:1.23-alpine \
-//     sh -c 'CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
-//            go build -trimpath -ldflags="-s -w" -o healthcheck healthcheck.go'
+//   docker run --rm -v "$PWD":/src -w /src golang:1.23-alpine sh -c '\
+//     CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
+//       go build -trimpath -ldflags="-s -w" -o healthcheck-arm64 healthcheck.go && \
+//     CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+//       go build -trimpath -ldflags="-s -w" -o healthcheck-amd64 healthcheck.go'
 //
-// The compiled binary is committed alongside this source so the runtime
+// Both binaries are committed alongside this source so the runtime
 // Dockerfile does not need a Go build stage.
 package main
 
