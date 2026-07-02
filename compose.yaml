@@ -1,0 +1,136 @@
+name: expense_dev
+
+services:
+  expense-api:
+    image: uptimecrew/expense-api:${APP_VERSION:?APP_VERSION required}
+    restart: unless-stopped
+    env_file:
+      - ./envs/expense.env
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-expense_dev}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-expense_dev}
+      # Documented in the task spec. Spring Boot does not natively read `_FILE`
+      # env vars, so the actual injection uses SPRING_CONFIG_IMPORT below.
+      SPRING_DATASOURCE_PASSWORD_FILE: /run/secrets/pg_password
+      # Spring Boot's configtree source treats each file under the directory as
+      # a property whose name is the filename. Mounting the same Compose secret
+      # a second time as `spring.datasource.password` injects the password
+      # natively — no shim, no plaintext, no code change.
+      SPRING_CONFIG_IMPORT: optional:configtree:/run/secrets/
+    ports:
+      - "${API_HOST_PORT:-8080}:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+    secrets:
+      - source: pg_password
+        target: pg_password
+      - source: pg_password
+        target: spring.datasource.password
+    networks:
+      - expense_net
+
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-expense_dev}
+      POSTGRES_USER: ${POSTGRES_USER:-expense_dev}
+      POSTGRES_PASSWORD_FILE: /run/secrets/pg_password
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # Bootstrap the schema on first init. The postgres image runs any *.sql
+      # under /docker-entrypoint-initdb.d/ in lexical order after createdb.
+      # V2 (seed) is intentionally skipped in the local stack — its historical
+      # negative-amount fixtures conflict with the current check constraint,
+      # and JPA schema validation only needs the tables to exist.
+      - ./db/V1__schema.sql:/docker-entrypoint-initdb.d/10-schema.sql:ro
+      - ./expense-api/src/main/resources/db/migration/V3__event_outbox.sql:/docker-entrypoint-initdb.d/30-event-outbox.sql:ro
+    secrets:
+      - pg_password
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-expense_dev} -d ${POSTGRES_DB:-expense_dev}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    networks:
+      - expense_net
+
+  redis:
+    image: redis:7
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+    networks:
+      - expense_net
+
+  # Mongo is not in the W5D2 service list, but the published expense-api image
+  # wires in spring-boot-starter-data-mongodb and instantiates the merchant
+  # read-model repository at startup — without a reachable Mongo the context
+  # fails to refresh, so the API can never report readiness UP. Runs anonymous
+  # (no auth, ephemeral) since the read model has no PII in local dev.
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD-SHELL", "mongosh --quiet --eval 'db.runCommand({ ping: 1 }).ok' | grep -q 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    networks:
+      - expense_net
+
+  kafka:
+    image: apache/kafka:3.7.0
+    restart: unless-stopped
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      CLUSTER_ID: 4L6g3nShT-eMCtK--X86sw
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 15
+      start_period: 30s
+    networks:
+      - expense_net
+
+networks:
+  expense_net:
+    driver: bridge
+
+volumes:
+  pgdata:
+  kafka-data:
+  mongo-data:
+
+secrets:
+  pg_password:
+    file: ./secrets/pg_password.txt

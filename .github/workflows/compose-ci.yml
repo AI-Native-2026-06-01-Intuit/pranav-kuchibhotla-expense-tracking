@@ -1,0 +1,92 @@
+name: expense-api compose-ci
+
+on:
+  pull_request:
+    paths:
+      - compose.yaml
+      - compose.override.yaml
+      - compose.profiles.yaml
+      - envs/**
+      - scripts/**
+      - Makefile
+      - expense-api/**
+      - otelcol/**
+      - .github/workflows/compose-ci.yml
+
+concurrency:
+  group: compose-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    name: docker compose smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build local expense-api image expected by compose
+        working-directory: expense-api
+        run: |
+          docker buildx build \
+            --load \
+            --tag uptimecrew/expense-api:0.1.0 \
+            --build-arg APP_VERSION=0.1.0 \
+            --build-arg GIT_SHA=${{ github.sha }} \
+            .
+
+      - name: Seed envs/expense.env from example
+        run: cp envs/expense.env.example envs/expense.env
+
+      - name: Provision Postgres secret file
+        env:
+          CI_PG_PASSWORD: ${{ secrets.CI_PG_PASSWORD }}
+        run: |
+          if [ -n "${CI_PG_PASSWORD:-}" ]; then
+            printf '%s' "$CI_PG_PASSWORD" > secrets/pg_password.txt
+            echo "Using CI_PG_PASSWORD from repo secret."
+          else
+            # Fallback keeps forked-PR validation working when the repo secret
+            # is not exposed to the runner. Never used for real deploys.
+            printf 'expense-dev-password' > secrets/pg_password.txt
+            echo "CI_PG_PASSWORD not set; using local-dev fallback password."
+          fi
+          chmod 600 secrets/pg_password.txt
+
+      - name: Ensure smoke.sh is executable
+        run: chmod +x scripts/smoke.sh
+
+      - name: Validate compose config
+        run: docker compose --env-file envs/expense.env -f compose.yaml -f compose.override.yaml config --quiet
+
+      - name: Compose up (wait for healthy)
+        run: docker compose --env-file envs/expense.env -f compose.yaml -f compose.override.yaml up -d --wait --wait-timeout 120
+
+      - name: Run smoke test
+        run: ./scripts/smoke.sh
+
+      - name: Capture compose diagnostics on failure
+        if: failure()
+        run: |
+          {
+            echo "===== docker compose ps ====="
+            docker compose --env-file envs/expense.env -f compose.yaml -f compose.override.yaml ps || true
+            echo
+            echo "===== docker compose logs ====="
+            docker compose --env-file envs/expense.env -f compose.yaml -f compose.override.yaml logs --no-color || true
+          } > compose-logs.txt
+
+      - name: Upload compose logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compose-logs
+          path: compose-logs.txt
+          retention-days: 14
+
+      - name: Tear down
+        if: always()
+        run: docker compose --env-file envs/expense.env -f compose.yaml -f compose.override.yaml down --volumes --remove-orphans

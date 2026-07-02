@@ -4,3 +4,9 @@ out/
 .idea/
 .vscode/
 *.iml
+
+envs/*.env
+!envs/*.env.example
+secrets/*
+!secrets/.gitkeep
+compose-logs.txt

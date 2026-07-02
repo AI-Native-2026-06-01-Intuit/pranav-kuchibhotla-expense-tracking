@@ -1,0 +1,71 @@
+# Opt-in services grouped by profile.
+# Include explicitly:  docker compose -f compose.yaml -f compose.profiles.yaml --profile e2e up -d
+# Profiles do NOT auto-load with `docker compose up`; base + override are enough for the API loop.
+
+services:
+  expense-web:
+    profiles: ["e2e"]
+    image: uptimecrew/expense-web:0.1.0
+    restart: unless-stopped
+    ports:
+      - "5173:5173"
+    environment:
+      VITE_API_BASE_URL: http://localhost:8080
+    depends_on:
+      expense-api:
+        condition: service_healthy
+    networks:
+      - expense_net
+
+  seed-fixtures:
+    profiles: ["test"]
+    image: postgres:16
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGPASSWORD_FILE: /run/secrets/pg_password
+      POSTGRES_DB: ${POSTGRES_DB:-expense_dev}
+      POSTGRES_USER: ${POSTGRES_USER:-expense_dev}
+    secrets:
+      - pg_password
+    entrypoint:
+      - sh
+      - -c
+      - |
+        set -eu
+        export PGPASSWORD="$$(cat /run/secrets/pg_password)"
+        echo "Seeding fixtures into $$POSTGRES_DB as $$POSTGRES_USER ..."
+        psql -h postgres -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" -v ON_ERROR_STOP=1 <<'SQL'
+        CREATE TABLE IF NOT EXISTS smoke_fixture (id text PRIMARY KEY, note text);
+        INSERT INTO smoke_fixture(id, note) VALUES ('mer_synth_001','seeded')
+          ON CONFLICT (id) DO NOTHING;
+        SQL
+        echo "seed-fixtures: done"
+    networks:
+      - expense_net
+
+  otelcol:
+    profiles: ["observability", "e2e"]
+    image: otel/opentelemetry-collector-contrib:0.111.0
+    restart: unless-stopped
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./otelcol/config.yaml:/etc/otelcol/config.yaml:ro
+    depends_on:
+      jaeger:
+        condition: service_started
+    networks:
+      - expense_net
+
+  jaeger:
+    profiles: ["observability", "e2e"]
+    image: jaegertracing/all-in-one:1.60
+    restart: unless-stopped
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686"
+    networks:
+      - expense_net
