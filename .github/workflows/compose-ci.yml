@@ -60,10 +60,20 @@ jobs:
         run: chmod +x scripts/smoke.sh
 
       - name: Validate compose config
-        run: docker compose --env-file envs/expense.env -f compose.yaml -f compose.override.yaml config --quiet
+        run: docker compose --env-file envs/expense.env -f compose.yaml config --quiet
 
       - name: Compose up (wait for healthy)
-        run: docker compose --env-file envs/expense.env -f compose.yaml -f compose.override.yaml up -d --wait --wait-timeout 120
+        # 180s: cold runners still need to pull postgres:16 + redis:7 +
+        # apache/kafka:3.7.0 + mongo:7 before the API's context can refresh.
+        run: docker compose --env-file envs/expense.env -f compose.yaml up -d --wait --wait-timeout 180
+
+      - name: Show container state
+        run: docker compose --env-file envs/expense.env -f compose.yaml ps
+
+      - name: Tear down base stack before smoke
+        # The smoke script spins up its own isolated project on a distinct host
+        # port (18080). Freeing 8080 first avoids surprising the smoke stack.
+        run: docker compose --env-file envs/expense.env -f compose.yaml down --volumes --remove-orphans
 
       - name: Run smoke test
         run: ./scripts/smoke.sh
@@ -73,10 +83,10 @@ jobs:
         run: |
           {
             echo "===== docker compose ps ====="
-            docker compose --env-file envs/expense.env -f compose.yaml -f compose.override.yaml ps || true
+            docker compose --env-file envs/expense.env -f compose.yaml ps || true
             echo
             echo "===== docker compose logs ====="
-            docker compose --env-file envs/expense.env -f compose.yaml -f compose.override.yaml logs --no-color || true
+            docker compose --env-file envs/expense.env -f compose.yaml logs --no-color || true
           } > compose-logs.txt
 
       - name: Upload compose logs
@@ -89,4 +99,4 @@ jobs:
 
       - name: Tear down
         if: always()
-        run: docker compose --env-file envs/expense.env -f compose.yaml -f compose.override.yaml down --volumes --remove-orphans
+        run: docker compose --env-file envs/expense.env -f compose.yaml down --volumes --remove-orphans
