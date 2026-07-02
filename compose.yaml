@@ -37,15 +37,18 @@ services:
     # start_period=30s, interval=30s, retries=3 — fine on a warm developer
     # laptop, but cold GitHub runners routinely need >90s for Spring to wire
     # JPA + Mongo + Redis + Kafka before /actuator/health/readiness returns
-    # UP. `start_period` counts as grace (failures don't accrue retries),
-    # so this only slows the *first* boot; steady-state probes are still
-    # fast (5s interval).
+    # UP. start_period is pure grace (failures don't accrue against retries),
+    # so this only slows the first boot; steady-state probing stays cheap.
+    # Total worst-case time before Docker marks unhealthy on CI:
+    #   start_period 90s + retries 30 * interval 10s = 390s.
+    # The image is distroless, so we reuse the /home/nonroot/healthcheck
+    # binary baked in by the W5D1 Dockerfile — curl is not available.
     healthcheck:
       test: ["CMD", "/home/nonroot/healthcheck"]
-      start_period: 120s
-      interval: 5s
-      timeout: 3s
-      retries: 20
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 90s
     networks:
       - expense_net
 
