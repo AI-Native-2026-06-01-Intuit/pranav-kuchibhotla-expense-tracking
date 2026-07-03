@@ -50,18 +50,18 @@ jobs:
 
       - name: Provision Postgres secret file
         env:
+          # Fallback covers two failure modes at once: repo secret unset AND
+          # repo secret set-but-empty. Either would previously leave the
+          # container with a zero-byte password file, and postgres/Spring
+          # would present very confusing "auth ok, then dropped" behavior.
           CI_PG_PASSWORD: ${{ secrets.CI_PG_PASSWORD }}
         run: |
-          if [ -n "${CI_PG_PASSWORD:-}" ]; then
-            printf '%s' "$CI_PG_PASSWORD" > secrets/pg_password.txt
-            echo "Using CI_PG_PASSWORD from repo secret."
-          else
-            # Fallback keeps forked-PR validation working when the repo secret
-            # is not exposed to the runner. Never used for real deploys.
-            printf 'expense-dev-password' > secrets/pg_password.txt
-            echo "CI_PG_PASSWORD not set; using local-dev fallback password."
-          fi
+          CI_PG_PASSWORD="${CI_PG_PASSWORD:-expense-dev-password}"
+          printf '%s' "$CI_PG_PASSWORD" > secrets/pg_password.txt
           chmod 600 secrets/pg_password.txt
+          # Never echo the value. Print only the byte count so we can prove
+          # the file is non-empty from the CI log alone.
+          echo "secrets/pg_password.txt bytes: $(wc -c < secrets/pg_password.txt)"
 
       - name: Ensure smoke.sh is executable
         run: chmod +x scripts/smoke.sh
@@ -115,11 +115,18 @@ jobs:
       # depends on, print the code + body of every attempt, cap at 300s.
       # This is the real "is the API ready" question — Docker's healthcheck
       # only mirrors it and its failures are opaque.
+      #
+      # Every 10 attempts we also print the container's State.Status +
+      # RestartCount. A rising RestartCount here immediately signals a crash
+      # loop (the observed CI symptom: brief accept, then code=000 forever),
+      # which points at a Spring startup failure that the tail-of-log dump
+      # will make specific.
       - name: Wait for expense-api readiness (host curl)
         id: readiness
         run: |
           set -u
           url="http://localhost:8080/actuator/health/readiness"
+          cid="expense_dev-expense-api-1"
           deadline=$((SECONDS + 300))
           attempt=0
           while :; do
@@ -129,6 +136,10 @@ jobs:
             if [ "$body" = "200" ] && grep -q '"status":"UP"' /tmp/readiness.body; then
               echo "expense-api readiness UP after ${attempt} attempt(s)"
               exit 0
+            fi
+            if [ $((attempt % 10)) -eq 0 ]; then
+              state=$(docker inspect --format '{{.State.Status}} restarts={{.RestartCount}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$cid" 2>/dev/null || echo "inspect-failed")
+              echo "    container state: $state"
             fi
             if [ $SECONDS -ge $deadline ]; then
               echo "::error::expense-api readiness never returned status UP within 300s"
@@ -143,14 +154,17 @@ jobs:
           echo "===== docker compose ps ====="
           docker compose --env-file envs/expense.env -f compose.yaml ps || true
           echo
+          echo "===== docker inspect expense_dev-expense-api-1 .State ====="
+          docker inspect expense_dev-expense-api-1 --format '{{json .State}}' || true
+          echo
           echo "===== docker inspect expense_dev-expense-api-1 .State.Health ====="
           docker inspect expense_dev-expense-api-1 --format '{{json .State.Health}}' || true
           echo
-          echo "===== docker compose logs expense-api (tail 300) ====="
-          docker compose --env-file envs/expense.env -f compose.yaml logs --no-color --tail=300 expense-api || true
+          echo "===== docker compose logs expense-api (tail 500) ====="
+          docker compose --env-file envs/expense.env -f compose.yaml logs --no-color --tail=500 expense-api || true
           echo
-          echo "===== docker compose logs postgres/redis/kafka/mongo (tail 120) ====="
-          docker compose --env-file envs/expense.env -f compose.yaml logs --no-color --tail=120 postgres redis kafka mongo || true
+          echo "===== docker compose logs postgres/redis/kafka/mongo (tail 200) ====="
+          docker compose --env-file envs/expense.env -f compose.yaml logs --no-color --tail=200 postgres redis kafka mongo || true
 
       - name: Show container state
         run: docker compose --env-file envs/expense.env -f compose.yaml ps
