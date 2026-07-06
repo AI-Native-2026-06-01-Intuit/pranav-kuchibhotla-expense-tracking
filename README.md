@@ -160,3 +160,10 @@ make nuke          # containers + volumes + local images
 The regular stack binds `localhost:8080`. `make smoke` spins up an **isolated** per-invocation project on `localhost:18080` (base compose file only — the JDWP-publishing override is skipped) so it can run alongside `make up` without host-port collisions. Override the port with `HOST_PORT=... make smoke` if 18080 is taken.
 
 See [scripts/dev.md](scripts/dev.md) for the two-terminal live-reload loop (`./gradlew :expense-api:bootJar --continuous` + `docker compose --profile dev up -d expense-api-dev`). Opt-in profiles: `test` seeds fixtures, `e2e` adds the web UI + otelcol + Jaeger, `observability` adds otelcol + Jaeger only.
+
+## Week 5 Day 3
+
+W5D3 deploys expense-api to a local Kubernetes cluster (k3d) with a Deployment, Service, ConfigMap, Secret, HPA (autoscaling/v2), NGINX Ingress, and a matching kubeconform + k3d CI gate. Manifests live under [`manifests/`](./manifests) and are the source of truth (no `kubectl edit`).
+
+- `./scripts/k8s-up.sh` — create the k3d cluster (if missing), import the local `uptimecrew/expense-api:0.1.0` image, apply every manifest under `manifests/`, and wait for the rollout.
+- `./scripts/k8s-smoke.sh` — verify readiness/liveness through the NGINX Ingress and hit `/api/v1/merchants/mer_synth_001`; prints kubectl diagnostics on failure.
