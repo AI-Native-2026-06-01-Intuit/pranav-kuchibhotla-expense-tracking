@@ -1,0 +1,44 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: expense-api-config
+  namespace: expense-dev
+  labels:
+    app.kubernetes.io/name: expense-api
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: expense
+    app.kubernetes.io/managed-by: kubectl
+data:
+  # Runtime profile. `k8s` is the intended production-like profile; the app
+  # falls back to `application.yml` defaults for anything not overridden here.
+  SPRING_PROFILES_ACTIVE: "k8s"
+  LOGGING_LEVEL_ROOT: "INFO"
+  SERVER_PORT: "8080"
+
+  # In-cluster DNS points at the ClusterIP Services declared in
+  # manifests/80-dependencies.*.yaml (all in the same namespace, so the short
+  # form would work; the FQDN is used so the manifest still reads correctly
+  # if someone applies it against a different namespace).
+  SPRING_DATASOURCE_URL: "jdbc:postgresql://postgres.expense-dev.svc.cluster.local:5432/expense_dev"
+  SPRING_DATASOURCE_USERNAME: "expense_dev"
+  SPRING_DATA_REDIS_HOST: "redis.expense-dev.svc.cluster.local"
+  SPRING_DATA_REDIS_PORT: "6379"
+  SPRING_KAFKA_BOOTSTRAP_SERVERS: "kafka.expense-dev.svc.cluster.local:9092"
+  SPRING_KAFKA_CONSUMER_GROUP_ID: "expense-k8s"
+  SPRING_DATA_MONGODB_URI: "mongodb://mongo.expense-dev.svc.cluster.local:27017/expense_dev"
+
+  OTEL_EXPORTER_OTLP_ENDPOINT: "http://otelcol.expense-dev.svc.cluster.local:4317"
+  OTEL_SERVICE_NAME: "expense-api"
+
+  # Actuator readiness gate — same lesson as W5D2 compose-ci: with Kafka,
+  # Mongo, Redis, and JPA starters all on the classpath, Spring's default
+  # readiness group implicitly reflects every indicator the auto-config
+  # attaches. On a cold cluster (or a k3d node under CI CPU pressure) the
+  # Kafka broker-api-versions probe flaps for minutes, keeping readiness DOWN
+  # even though the API is serving traffic. Pin the group to readinessState +
+  # db so the probe reflects exactly what the container needs to answer HTTP.
+  MANAGEMENT_HEALTH_DEFAULTS_ENABLED: "false"
+  MANAGEMENT_HEALTH_DB_ENABLED: "true"
+  MANAGEMENT_HEALTH_PING_ENABLED: "true"
+  MANAGEMENT_ENDPOINT_HEALTH_GROUP_READINESS_INCLUDE: "readinessState,db"
+  MANAGEMENT_ENDPOINT_HEALTH_GROUP_LIVENESS_INCLUDE: "livenessState,ping"
