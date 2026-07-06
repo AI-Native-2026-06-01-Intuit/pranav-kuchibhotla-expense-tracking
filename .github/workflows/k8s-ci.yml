@@ -1,0 +1,150 @@
+name: expense-api k8s-ci
+
+on:
+  pull_request:
+    paths:
+      - manifests/**
+      - scripts/k8s-*.sh
+      - expense-api/**
+      - .github/workflows/k8s-ci.yml
+
+concurrency:
+  group: k8s-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  k8s-smoke:
+    name: manifest lint + k3d smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # --- static: manifests must parse against upstream schemas -------------
+      - name: Install kubeconform v0.6.7
+        run: |
+          curl -sSL \
+            https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz \
+            | tar xz -C /usr/local/bin kubeconform
+          kubeconform -v
+
+      - name: Kubeconform (strict) on manifests/
+        run: kubeconform -strict -summary -schema-location default manifests/
+
+      # --- dynamic: real cluster + rollout gate ------------------------------
+      - name: Build expense-api image from this branch
+        run: |
+          docker build \
+            --build-arg APP_VERSION=0.1.0 \
+            --build-arg GIT_SHA=${{ github.sha }} \
+            -t uptimecrew/expense-api:${{ github.sha }} \
+            ./expense-api
+
+      - name: Install k3d
+        run: |
+          curl -sSL https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh \
+            | TAG=v5.7.4 bash
+          k3d version
+
+      - name: Create k3d cluster (traefik disabled — we use ingress-nginx)
+        run: |
+          k3d cluster create expense-ci \
+            --servers 1 --agents 2 \
+            --port "8080:80@loadbalancer" \
+            --k3s-arg "--disable=traefik@server:0" \
+            --wait
+          kubectl config use-context k3d-expense-ci
+          kubectl cluster-info
+
+      - name: Install ingress-nginx
+        run: |
+          kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.11.2/deploy/static/provider/cloud/deploy.yaml
+          kubectl -n ingress-nginx rollout status deploy/ingress-nginx-controller --timeout=5m
+
+      - name: Import expense-api image into k3d
+        run: k3d image import uptimecrew/expense-api:${{ github.sha }} -c expense-ci
+
+      # Retag the image inside the manifest to this branch's SHA. Manifests
+      # ship with :0.1.0 as the source-of-truth tag; CI pins to the SHA it
+      # just built so we're testing exactly the artifact the PR produced.
+      - name: Retag Deployment image to CI SHA (working tree only)
+        run: |
+          sed -i \
+            "s#uptimecrew/expense-api:0.1.0#uptimecrew/expense-api:${{ github.sha }}#" \
+            manifests/10-expense-api.deployment.yaml
+          grep -F "uptimecrew/expense-api:${{ github.sha }}" manifests/10-expense-api.deployment.yaml
+
+      - name: Seed schema ConfigMap for postgres
+        # Same trick as scripts/k8s-up.sh: build the initdb ConfigMap from the
+        # tracked V1 + V3 SQL so compose-CI and k8s-CI share the schema.
+        run: |
+          kubectl create namespace expense-dev --dry-run=client -o yaml | kubectl apply -f -
+          kubectl create configmap postgres-initdb -n expense-dev \
+            --from-file=10-schema.sql=db/V1__schema.sql \
+            --from-file=30-event-outbox.sql=expense-api/src/main/resources/db/migration/V3__event_outbox.sql \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Seed expense-api-secrets from CI_PG_PASSWORD (or fallback)
+        env:
+          # Same fallback pattern as compose-ci — covers unset OR set-but-empty.
+          CI_PG_PASSWORD: ${{ secrets.CI_PG_PASSWORD }}
+        run: |
+          CI_PG_PASSWORD="${CI_PG_PASSWORD:-expense-dev-password}"
+          kubectl create secret generic expense-api-secrets -n expense-dev \
+            --from-literal=SPRING_DATASOURCE_PASSWORD="$CI_PG_PASSWORD" \
+            --dry-run=client -o yaml | kubectl apply -f -
+          echo "expense-api-secrets keys: $(kubectl get secret expense-api-secrets -n expense-dev -o jsonpath='{.data}' | tr ',' '\n' | wc -l)"
+
+      - name: Server-side dry-run of manifests/
+        # Catches schema-valid-but-cluster-invalid combos (quota vs limits,
+        # unresolved refs, etc.) before we actually apply.
+        run: kubectl apply -f manifests/ --dry-run=server
+
+      - name: Apply manifests
+        run: kubectl apply -f manifests/
+
+      - name: Wait for rollout
+        run: kubectl rollout status deploy/expense-api -n expense-dev --timeout=8m
+
+      - name: Smoke test
+        env:
+          HOST_PORT: "8080"
+        run: ./scripts/k8s-smoke.sh
+
+      - name: Capture k8s diagnostics on failure
+        if: failure()
+        run: |
+          {
+            echo "===== kubectl get all -n expense-dev -o wide ====="
+            kubectl get all -n expense-dev -o wide || true
+            echo
+            echo "===== kubectl get events -n expense-dev --sort-by=.lastTimestamp ====="
+            kubectl get events -n expense-dev --sort-by=.lastTimestamp || true
+            echo
+            echo "===== kubectl describe deploy/expense-api -n expense-dev ====="
+            kubectl describe deploy/expense-api -n expense-dev || true
+            echo
+            echo "===== kubectl describe pods -n expense-dev ====="
+            kubectl describe pods -n expense-dev || true
+            echo
+            echo "===== kubectl logs deploy/expense-api -n expense-dev --tail=300 ====="
+            kubectl logs deploy/expense-api -n expense-dev --tail=300 || true
+            echo
+            echo "===== dependency logs (postgres/redis/mongo/kafka) ====="
+            for d in postgres redis mongo kafka; do
+              echo "--- $d ---"
+              kubectl logs deploy/"$d" -n expense-dev --tail=100 || true
+            done
+          } > pod-logs.txt
+
+      - name: Upload k8s diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: k8s-diagnostics
+          path: pod-logs.txt
+          retention-days: 14
+
+      - name: Tear down k3d cluster
+        if: always()
+        run: k3d cluster delete expense-ci || true
