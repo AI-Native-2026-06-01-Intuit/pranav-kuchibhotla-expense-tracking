@@ -1,0 +1,216 @@
+name: expense-api compose-ci
+
+on:
+  pull_request:
+    paths:
+      - compose.yaml
+      - compose.override.yaml
+      - compose.profiles.yaml
+      - envs/**
+      - scripts/**
+      - Makefile
+      - expense-api/**
+      - otelcol/**
+      - .github/workflows/compose-ci.yml
+
+concurrency:
+  group: compose-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    name: docker compose smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      # Plain `docker build` (no buildx --load): the resulting image lands in
+      # the local daemon under exactly the tag Compose looks for. buildx has
+      # produced silent per-runner mismatches in this repo before.
+      - name: Build expense-api image from this branch
+        run: |
+          docker build \
+            --build-arg APP_VERSION=0.1.0 \
+            --build-arg GIT_SHA=${{ github.sha }} \
+            -t uptimecrew/expense-api:0.1.0 \
+            ./expense-api
+
+      # Prove the image Compose will pick up is the one we just built,
+      # including USER and the baked HEALTHCHECK. Anything unexpected here
+      # would explain every "unhealthy in CI, healthy locally" failure mode.
+      - name: Verify image
+        run: |
+          docker image ls uptimecrew/expense-api
+          docker inspect uptimecrew/expense-api:0.1.0 \
+            --format '{{.Id}} {{.Config.User}} {{.Config.Healthcheck.Test}}'
+
+      - name: Seed envs/expense.env from example
+        run: cp envs/expense.env.example envs/expense.env
+
+      - name: Provision Postgres secret file
+        env:
+          # Fallback covers two failure modes at once: repo secret unset AND
+          # repo secret set-but-empty. Either would previously leave the
+          # container with a zero-byte password file, and postgres/Spring
+          # would present very confusing "auth ok, then dropped" behavior.
+          CI_PG_PASSWORD: ${{ secrets.CI_PG_PASSWORD }}
+        run: |
+          CI_PG_PASSWORD="${CI_PG_PASSWORD:-expense-dev-password}"
+          printf '%s' "$CI_PG_PASSWORD" > secrets/pg_password.txt
+          # Must be world-readable. Compose bind-mounts this file into
+          # /run/secrets/pg_password inside every service that declares the
+          # secret; the distroless expense-api image runs as UID 65532 and
+          # cannot read a mode-600 file owned by the runner user. Postgres
+          # tolerates 600 because its image drops root only after adjusting
+          # perms, but the API image never had that privilege — so a mode-600
+          # secret produces:
+          #   Caused by: java.nio.file.AccessDeniedException: /run/secrets/pg_password
+          # at org.springframework.boot.env.ConfigTreePropertySource...
+          # then the JVM exits 1, Docker restart-loops the container, and the
+          # readiness poll never sees port 8080 open. 0644 is safe here: the
+          # file only contains `expense-dev-password` and lives on an
+          # ephemeral runner that is torn down at job end.
+          chmod 0644 secrets/pg_password.txt
+          # Never echo the value. Print only the byte count + mode so we can
+          # prove from the log alone that the file is non-empty and readable.
+          echo "secrets/pg_password.txt bytes: $(wc -c < secrets/pg_password.txt)"
+          echo "secrets/pg_password.txt mode:  $(stat -c '%a' secrets/pg_password.txt)"
+
+      - name: Ensure smoke.sh is executable
+        run: chmod +x scripts/smoke.sh
+
+      - name: Validate compose config
+        run: docker compose --env-file envs/expense.env -f compose.yaml config --quiet
+
+      - name: Pre-pull datastore images
+        # Pull in advance so the readiness loop below measures Spring startup,
+        # not registry latency for postgres/redis/kafka/mongo.
+        run: docker compose --env-file envs/expense.env -f compose.yaml pull postgres redis kafka mongo
+
+      # Deliberately no --wait here. `compose up --wait` exits before we can
+      # attach logs, so an unhealthy API becomes a black-box failure. Start
+      # detached, then poll from bash so every attempt is visible in the log.
+      - name: Compose up (detached, no --wait)
+        run: docker compose --env-file envs/expense.env -f compose.yaml up -d
+
+      - name: Wait for datastores to report healthy
+        run: |
+          set -u
+          services="postgres redis kafka mongo"
+          deadline=$((SECONDS + 180))
+          for svc in $services; do
+            cid="expense_dev-${svc}-1"
+            echo "waiting for $cid to become healthy…"
+            while :; do
+              status=$(docker inspect --format '{{.State.Health.Status}}' "$cid" 2>/dev/null || echo missing)
+              case "$status" in
+                healthy)
+                  echo "  $cid: healthy"
+                  break
+                  ;;
+                starting)
+                  ;;
+                *)
+                  echo "  $cid: state=$status"
+                  ;;
+              esac
+              if [ $SECONDS -ge $deadline ]; then
+                echo "::error::datastore $cid never became healthy (last=$status)"
+                docker compose --env-file envs/expense.env -f compose.yaml ps
+                docker compose --env-file envs/expense.env -f compose.yaml logs --no-color --tail=200 "$svc" || true
+                exit 1
+              fi
+              sleep 3
+            done
+          done
+
+      # Host-side readiness gate: hit the actual HTTP endpoint the smoke test
+      # depends on, print the code + body of every attempt, cap at 300s.
+      # This is the real "is the API ready" question — Docker's healthcheck
+      # only mirrors it and its failures are opaque.
+      #
+      # Every 10 attempts we also print the container's State.Status +
+      # RestartCount. A rising RestartCount here immediately signals a crash
+      # loop (the observed CI symptom: brief accept, then code=000 forever),
+      # which points at a Spring startup failure that the tail-of-log dump
+      # will make specific.
+      - name: Wait for expense-api readiness (host curl)
+        id: readiness
+        run: |
+          set -u
+          url="http://localhost:8080/actuator/health/readiness"
+          cid="expense_dev-expense-api-1"
+          deadline=$((SECONDS + 300))
+          attempt=0
+          while :; do
+            attempt=$((attempt + 1))
+            body=$(curl -sS -o /tmp/readiness.body -w '%{http_code}' --max-time 5 "$url" || echo "000")
+            printf '  attempt=%02d code=%s body=%s\n' "$attempt" "$body" "$(cat /tmp/readiness.body 2>/dev/null)"
+            if [ "$body" = "200" ] && grep -q '"status":"UP"' /tmp/readiness.body; then
+              echo "expense-api readiness UP after ${attempt} attempt(s)"
+              exit 0
+            fi
+            if [ $((attempt % 10)) -eq 0 ]; then
+              state=$(docker inspect --format '{{.State.Status}} restarts={{.RestartCount}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$cid" 2>/dev/null || echo "inspect-failed")
+              echo "    container state: $state"
+            fi
+            if [ $SECONDS -ge $deadline ]; then
+              echo "::error::expense-api readiness never returned status UP within 300s"
+              exit 1
+            fi
+            sleep 3
+          done
+
+      - name: Diagnostics on readiness failure
+        if: failure() && steps.readiness.conclusion == 'failure'
+        run: |
+          echo "===== docker compose ps ====="
+          docker compose --env-file envs/expense.env -f compose.yaml ps || true
+          echo
+          echo "===== docker inspect expense_dev-expense-api-1 .State ====="
+          docker inspect expense_dev-expense-api-1 --format '{{json .State}}' || true
+          echo
+          echo "===== docker inspect expense_dev-expense-api-1 .State.Health ====="
+          docker inspect expense_dev-expense-api-1 --format '{{json .State.Health}}' || true
+          echo
+          echo "===== docker compose logs expense-api (tail 500) ====="
+          docker compose --env-file envs/expense.env -f compose.yaml logs --no-color --tail=500 expense-api || true
+          echo
+          echo "===== docker compose logs postgres/redis/kafka/mongo (tail 200) ====="
+          docker compose --env-file envs/expense.env -f compose.yaml logs --no-color --tail=200 postgres redis kafka mongo || true
+
+      - name: Show container state
+        run: docker compose --env-file envs/expense.env -f compose.yaml ps
+
+      - name: Tear down base stack before smoke
+        # The smoke script spins up its own isolated project on a distinct
+        # host port (18080). Freeing 8080 and freeing RAM first keeps the
+        # runner from thrashing when two full stacks would overlap.
+        run: docker compose --env-file envs/expense.env -f compose.yaml down --volumes --remove-orphans
+
+      - name: Run smoke test
+        run: ./scripts/smoke.sh
+
+      - name: Capture compose diagnostics on failure
+        if: failure()
+        run: |
+          {
+            echo "===== docker compose ps ====="
+            docker compose --env-file envs/expense.env -f compose.yaml ps || true
+            echo
+            echo "===== docker compose logs ====="
+            docker compose --env-file envs/expense.env -f compose.yaml logs --no-color || true
+          } > compose-logs.txt
+
+      - name: Upload compose logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compose-logs
+          path: compose-logs.txt
+          retention-days: 14
+
+      - name: Tear down
+        if: always()
+        run: docker compose --env-file envs/expense.env -f compose.yaml down --volumes --remove-orphans

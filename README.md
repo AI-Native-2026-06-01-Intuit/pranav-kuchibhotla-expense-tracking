@@ -142,3 +142,21 @@ The Gradle wrapper is intentionally present in **two** locations:
 - `expense-api/gradlew` + `expense-api/gradle/wrapper/` — used **inside the Docker build**, where the build context is `./expense-api` and the Dockerfile does `COPY gradlew gradlew.bat ./` before running `./gradlew bootJar`. The context-scoped wrapper keeps the build context small and avoids pulling the whole repo into the builder stage.
 
 Both wrappers are pinned to the same Gradle version; refresh them together (`./gradlew wrapper --gradle-version <x>` from the repo root, then `cd expense-api && ../gradlew wrapper --gradle-version <x>`).
+
+## Week 5 Day 2
+
+W5D2 adds a Docker Compose v2 stack (`compose.yaml`, `compose.override.yaml`, `compose.profiles.yaml`) for local development: `expense-api` + `postgres:16` + `redis:7` + `apache/kafka:3.7` (single-broker KRaft). Postgres reads its password from a Compose secret; nothing is baked into committed YAML.
+
+First-time setup, then the everyday loop:
+
+```bash
+cp envs/expense.env.example envs/expense.env
+printf 'expense-dev-password' > secrets/pg_password.txt
+make up            # docker compose up -d --wait (base + override)
+make smoke         # end-to-end health + HTTP checks on a per-invocation project
+make nuke          # containers + volumes + local images
+```
+
+The regular stack binds `localhost:8080`. `make smoke` spins up an **isolated** per-invocation project on `localhost:18080` (base compose file only — the JDWP-publishing override is skipped) so it can run alongside `make up` without host-port collisions. Override the port with `HOST_PORT=... make smoke` if 18080 is taken.
+
+See [scripts/dev.md](scripts/dev.md) for the two-terminal live-reload loop (`./gradlew :expense-api:bootJar --continuous` + `docker compose --profile dev up -d expense-api-dev`). Opt-in profiles: `test` seeds fixtures, `e2e` adds the web UI + otelcol + Jaeger, `observability` adds otelcol + Jaeger only.
