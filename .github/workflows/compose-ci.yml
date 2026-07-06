@@ -58,10 +58,24 @@ jobs:
         run: |
           CI_PG_PASSWORD="${CI_PG_PASSWORD:-expense-dev-password}"
           printf '%s' "$CI_PG_PASSWORD" > secrets/pg_password.txt
-          chmod 600 secrets/pg_password.txt
-          # Never echo the value. Print only the byte count so we can prove
-          # the file is non-empty from the CI log alone.
+          # Must be world-readable. Compose bind-mounts this file into
+          # /run/secrets/pg_password inside every service that declares the
+          # secret; the distroless expense-api image runs as UID 65532 and
+          # cannot read a mode-600 file owned by the runner user. Postgres
+          # tolerates 600 because its image drops root only after adjusting
+          # perms, but the API image never had that privilege — so a mode-600
+          # secret produces:
+          #   Caused by: java.nio.file.AccessDeniedException: /run/secrets/pg_password
+          # at org.springframework.boot.env.ConfigTreePropertySource...
+          # then the JVM exits 1, Docker restart-loops the container, and the
+          # readiness poll never sees port 8080 open. 0644 is safe here: the
+          # file only contains `expense-dev-password` and lives on an
+          # ephemeral runner that is torn down at job end.
+          chmod 0644 secrets/pg_password.txt
+          # Never echo the value. Print only the byte count + mode so we can
+          # prove from the log alone that the file is non-empty and readable.
           echo "secrets/pg_password.txt bytes: $(wc -c < secrets/pg_password.txt)"
+          echo "secrets/pg_password.txt mode:  $(stat -c '%a' secrets/pg_password.txt)"
 
       - name: Ensure smoke.sh is executable
         run: chmod +x scripts/smoke.sh
