@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: expense-api
+  namespace: expense-dev
+  labels:
+    app.kubernetes.io/name: expense-api
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: expense
+    app.kubernetes.io/managed-by: kubectl
+spec:
+  # ClusterIP only; external traffic enters through the NGINX Ingress in
+  # manifests/60-expense-api.ingress.yaml. LoadBalancer would drag in a per-
+  # namespace public IP that k3d simulates via klipper-lb, and on CI runners
+  # that just wastes ports.
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: expense-api
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP

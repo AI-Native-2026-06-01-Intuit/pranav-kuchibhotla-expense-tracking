@@ -1,0 +1,121 @@
+# Minimal Postgres for the local W5D3 cluster. Single replica, emptyDir
+# storage (data is discarded on Pod restart — that's the point on a laptop
+# k3d cluster; a StatefulSet + PVC would be the next step for a persistent
+# tier). Schema is applied on first init via /docker-entrypoint-initdb.d/,
+# same pattern as W5D2 compose.
+#
+# NOTE: We keep the schema SQL in db/V1__schema.sql and
+# expense-api/src/main/resources/db/migration/V3__event_outbox.sql (source of
+# truth). Because a ConfigMap cannot pull from outside the manifest set at
+# apply time, k8s-up.sh / k8s-ci.yml build a schema ConfigMap from those two
+# files with `kubectl create configmap ... --from-file=...`. The Postgres
+# Pod below mounts that ConfigMap at /docker-entrypoint-initdb.d/, so the
+# schema stays consistent with compose without duplicating the SQL here.
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: expense-dev
+  labels:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/component: database
+    app.kubernetes.io/part-of: expense
+    app.kubernetes.io/managed-by: kubectl
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+      protocol: TCP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: expense-dev
+  labels:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/component: database
+    app.kubernetes.io/part-of: expense
+    app.kubernetes.io/managed-by: kubectl
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: postgres
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: postgres
+        app.kubernetes.io/component: database
+        app.kubernetes.io/part-of: expense
+        app.kubernetes.io/managed-by: kubectl
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              value: "expense_dev"
+            - name: POSTGRES_USER
+              value: "expense_dev"
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: expense-api-secrets
+                  key: SPRING_DATASOURCE_PASSWORD
+            # emptyDir is world-writable but PGDATA needs 0700; point PGDATA
+            # at a subdir so postgres can chmod what it owns.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 512Mi
+          readinessProbe:
+            exec:
+              command:
+                - pg_isready
+                - -U
+                - expense_dev
+                - -d
+                - expense_dev
+            periodSeconds: 5
+            failureThreshold: 20
+          livenessProbe:
+            exec:
+              command:
+                - pg_isready
+                - -U
+                - expense_dev
+                - -d
+                - expense_dev
+            periodSeconds: 20
+            failureThreshold: 6
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            - name: initdb
+              mountPath: /docker-entrypoint-initdb.d
+              readOnly: true
+      volumes:
+        - name: data
+          emptyDir: {}
+        - name: initdb
+          configMap:
+            # Populated by k8s-up.sh / k8s-ci from db/V1__schema.sql and
+            # expense-api/src/main/resources/db/migration/V3__event_outbox.sql
+            # so the same schema shipped by W5D2 compose is applied here.
+            name: postgres-initdb
+            optional: true

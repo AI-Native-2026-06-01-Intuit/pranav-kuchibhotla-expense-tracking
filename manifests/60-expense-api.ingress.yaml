@@ -1,0 +1,30 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: expense-api
+  namespace: expense-dev
+  labels:
+    app.kubernetes.io/name: expense-api
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: expense
+    app.kubernetes.io/managed-by: kubectl
+  annotations:
+    # 1 MiB body cap matches the JSON payload envelope for the merchant/LLM
+    # endpoints; anything larger belongs in a signed-upload flow, not here.
+    # 30s read timeout is generous for the LLM-backed POST and tight enough
+    # to fail fast on a stuck upstream.
+    nginx.ingress.kubernetes.io/proxy-body-size: "1m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "30"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: expense.dev.uptimecrew.internal
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: expense-api
+                port:
+                  number: 8080
