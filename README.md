@@ -167,3 +167,7 @@ W5D3 deploys expense-api to a local Kubernetes cluster (k3d) with a Deployment, 
 
 - `./scripts/k8s-up.sh` — create the k3d cluster (if missing), import the local `uptimecrew/expense-api:0.1.0` image, apply every manifest under `manifests/`, and wait for the rollout.
 - `./scripts/k8s-smoke.sh` — verify readiness/liveness through the NGINX Ingress and hit `/api/v1/merchants/mer_synth_001`; prints kubectl diagnostics on failure.
+
+## Week 5 Day 4
+
+Week 5 Day 4 serverless Lambda workflow: `./scripts/sam-deploy.sh` builds+deploys the merchant-lookup HTTP API (Java 21, arm64, SnapStart) with `template.yaml`, then `./scripts/sam-smoke.sh` verifies the deployed stack against real AWS. Local iteration uses `mvn -B -ntp test`, `sam build --use-container`, and `sam local invoke MerchantLookupFunction --event events/get-merchant.json`. The `.github/workflows/serverless.yml` CI gate runs validate/build/test/local-invoke on every PR and deploys the sandbox stack on push to `main` via GitHub Actions OIDC (no long-lived AWS keys).
