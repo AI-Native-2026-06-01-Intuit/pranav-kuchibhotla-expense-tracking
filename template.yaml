@@ -1,0 +1,114 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  W5D4 expense merchant lookup — HTTP API + Lambda (Java 21, arm64, SnapStart)
+  backed by DynamoDB. Read-side only.
+
+Parameters:
+  StageName:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - stage
+      - prod
+    Description: Deployment stage (dev, stage, or prod).
+  LogRetentionDays:
+    Type: Number
+    Default: 14
+    Description: CloudWatch log retention for the Lambda log group.
+
+Globals:
+  Function:
+    Runtime: java21
+    Architectures:
+      - arm64
+    MemorySize: 1024
+    Timeout: 10
+    Tracing: Active
+    LoggingConfig:
+      LogFormat: JSON
+      ApplicationLogLevel: INFO
+      SystemLogLevel: WARN
+    Environment:
+      Variables:
+        ENV: !Ref StageName
+
+Resources:
+  ExpenseHttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: !Ref StageName
+
+  MerchantsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "merchants-${StageName}"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+
+  MerchantLookupFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "expense-merchant-lookup-${StageName}"
+      Handler: com.uptimecrew.expense_tracking.lambda.MerchantLookupHandler::handleRequest
+      CodeUri: .
+      SnapStart:
+        ApplyOn: PublishedVersions
+      AutoPublishAlias: live
+      Environment:
+        Variables:
+          MERCHANTS_TABLE: !Ref MerchantsTable
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref MerchantsTable
+      Events:
+        GetMerchant:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref ExpenseHttpApi
+            Method: GET
+            Path: /merchants/{merchantId}
+
+  MerchantLookupFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/expense-merchant-lookup-${StageName}"
+      RetentionInDays: !Ref LogRetentionDays
+
+  MerchantLookupFunctionP99Alarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "expense-merchant-lookup-p99-${StageName}"
+      AlarmDescription: >
+        p99 duration for the merchant lookup Lambda over 5 consecutive
+        1-minute windows. Threshold is 1500 ms.
+      MetricName: Duration
+      Namespace: AWS/Lambda
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref MerchantLookupFunction
+      ExtendedStatistic: p99
+      Period: 60
+      EvaluationPeriods: 5
+      Threshold: 1500
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+
+Outputs:
+  HttpApiUrl:
+    Description: Base URL for the HTTP API stage.
+    Value: !Sub "https://${ExpenseHttpApi}.execute-api.${AWS::Region}.amazonaws.com/${StageName}"
+  FunctionName:
+    Description: Lambda function name.
+    Value: !Ref MerchantLookupFunction
+  MerchantsTableName:
+    Description: DynamoDB table name for merchants.
+    Value: !Ref MerchantsTable
