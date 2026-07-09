@@ -17,6 +17,18 @@ Parameters:
     Type: Number
     Default: 14
     Description: CloudWatch log retention for the Lambda log group.
+  TraineeTag:
+    Type: String
+    Default: pranav-kuchibhotla
+    Description: Value for the org-mandated 'trainee' tag (SCP-enforced).
+  TeamTag:
+    Type: String
+    Default: womm
+    Description: Value for the org-mandated 'team' tag (SCP-enforced).
+  EnvironmentTag:
+    Type: String
+    Default: training
+    Description: Value for the org-mandated 'environment' tag (SCP-enforced).
 
 Globals:
   Function:
@@ -39,6 +51,10 @@ Resources:
     Type: AWS::Serverless::HttpApi
     Properties:
       StageName: !Ref StageName
+      Tags:
+        trainee: !Ref TraineeTag
+        team: !Ref TeamTag
+        environment: !Ref EnvironmentTag
 
   MerchantsTable:
     Type: AWS::DynamoDB::Table
@@ -53,6 +69,13 @@ Resources:
           KeyType: HASH
       PointInTimeRecoverySpecification:
         PointInTimeRecoveryEnabled: true
+      Tags:
+        - Key: trainee
+          Value: !Ref TraineeTag
+        - Key: team
+          Value: !Ref TeamTag
+        - Key: environment
+          Value: !Ref EnvironmentTag
 
   MerchantLookupFunction:
     Type: AWS::Serverless::Function
@@ -76,12 +99,23 @@ Resources:
             ApiId: !Ref ExpenseHttpApi
             Method: GET
             Path: /merchants/{merchantId}
+      Tags:
+        trainee: !Ref TraineeTag
+        team: !Ref TeamTag
+        environment: !Ref EnvironmentTag
 
   MerchantLookupFunctionLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: !Sub "/aws/lambda/expense-merchant-lookup-${StageName}"
       RetentionInDays: !Ref LogRetentionDays
+      Tags:
+        - Key: trainee
+          Value: !Ref TraineeTag
+        - Key: team
+          Value: !Ref TeamTag
+        - Key: environment
+          Value: !Ref EnvironmentTag
 
   MerchantLookupFunctionP99Alarm:
     Type: AWS::CloudWatch::Alarm
@@ -101,6 +135,13 @@ Resources:
       Threshold: 1500
       ComparisonOperator: GreaterThanThreshold
       TreatMissingData: notBreaching
+      Tags:
+        - Key: trainee
+          Value: !Ref TraineeTag
+        - Key: team
+          Value: !Ref TeamTag
+        - Key: environment
+          Value: !Ref EnvironmentTag
 
 Outputs:
   HttpApiUrl:
