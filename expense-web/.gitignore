@@ -1,0 +1,13 @@
+node_modules
+dist
+dist-ssr
+coverage
+*.local
+.vite
+.DS_Store
+*.log
+
+# Playwright
+e2e/.auth/
+playwright-report/
+test-results/

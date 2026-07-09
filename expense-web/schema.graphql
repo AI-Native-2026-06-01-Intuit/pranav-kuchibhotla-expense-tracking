@@ -1,0 +1,19 @@
+type Merchant {
+  id: ID!
+  name: String!
+  updatedAt: String!
+}
+
+type MerchantSummary {
+  id: ID!
+  summaryText: String!
+  confidence: String!
+}
+
+type Query {
+  latestMerchants(limit: Int!): [Merchant!]!
+}
+
+type Mutation {
+  summarizeMerchant(id: ID!): MerchantSummary!
+}

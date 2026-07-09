@@ -1,0 +1,78 @@
+import '@testing-library/jest-dom/vitest';
+import { afterAll, afterEach, beforeAll, expect } from 'vitest';
+import { cleanup } from '@testing-library/react';
+import { toHaveNoViolations } from 'jest-axe';
+import { server } from './server';
+
+
+expect.extend(toHaveNoViolations);
+
+declare module '@vitest/expect' {
+  interface Assertion<T> {
+    toHaveNoViolations: () => T;
+  }
+  interface AsymmetricMatchersContaining {
+    toHaveNoViolations: () => unknown;
+  }
+}
+
+class MemoryStorage implements Storage {
+  private store = new Map<string, string>();
+
+  get length(): number {
+    return this.store.size;
+  }
+
+  clear(): void {
+    this.store.clear();
+  }
+
+  getItem(key: string): string | null {
+    return this.store.has(key) ? (this.store.get(key) ?? null) : null;
+  }
+
+  setItem(key: string, value: string): void {
+    this.store.set(key, String(value));
+  }
+
+  removeItem(key: string): void {
+    this.store.delete(key);
+  }
+
+  key(index: number): string | null {
+    const keys = Array.from(this.store.keys());
+    return index >= 0 && index < keys.length ? keys[index] ?? null : null;
+  }
+}
+
+const installStorage = (): void => {
+  const storage = new MemoryStorage();
+  Object.defineProperty(globalThis, 'localStorage', {
+    value: storage,
+    configurable: true,
+    writable: true,
+  });
+  if (typeof window !== 'undefined') {
+    Object.defineProperty(window, 'localStorage', {
+      value: storage,
+      configurable: true,
+      writable: true,
+    });
+  }
+};
+
+installStorage();
+
+beforeAll(() => {
+  server.listen({ onUnhandledRequest: 'error' });
+});
+
+afterEach(() => {
+  cleanup();
+  server.resetHandlers();
+  window.localStorage.clear();
+});
+
+afterAll(() => {
+  server.close();
+});

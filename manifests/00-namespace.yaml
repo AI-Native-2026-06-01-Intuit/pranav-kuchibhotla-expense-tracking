@@ -1,0 +1,49 @@
+# Namespace + governance for the W5D3 local cluster.
+# ResourceQuota caps namespace-wide requests/limits so a mis-authored HPA or a
+# noisy dependency can't crowd out the API pods on k3d. LimitRange gives every
+# unlabeled container a sane request/limit floor so a Pod with no resources
+# block still schedules and still respects the quota accounting.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: expense-dev
+  labels:
+    app.kubernetes.io/part-of: expense
+    app.kubernetes.io/managed-by: kubectl
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: expense-dev-quota
+  namespace: expense-dev
+  labels:
+    app.kubernetes.io/part-of: expense
+    app.kubernetes.io/managed-by: kubectl
+spec:
+  hard:
+    requests.cpu: "4"
+    requests.memory: 8Gi
+    limits.cpu: "8"
+    limits.memory: 16Gi
+    pods: "20"
+---
+# Defaults for containers that omit their own resources block. Numbers picked
+# so a bare Pod fits inside the quota's per-container envelope on a laptop k3d
+# cluster (Rancher Desktop defaults to 4 vCPU / 8 GiB).
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: expense-dev-defaults
+  namespace: expense-dev
+  labels:
+    app.kubernetes.io/part-of: expense
+    app.kubernetes.io/managed-by: kubectl
+spec:
+  limits:
+    - type: Container
+      default:
+        cpu: 500m
+        memory: 768Mi
+      defaultRequest:
+        cpu: 100m
+        memory: 256Mi

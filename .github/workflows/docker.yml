@@ -1,0 +1,131 @@
+name: expense-api docker
+
+on:
+  pull_request:
+    paths:
+      - 'expense-api/**'
+      - '.github/workflows/docker.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'expense-api/**'
+      - '.github/workflows/docker.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  hadolint:
+    name: hadolint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Hadolint (fail on warning)
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: expense-api/Dockerfile
+          config: expense-api/.hadolint.yaml
+          failure-threshold: warning
+
+  build-scan-smoke:
+    name: build + scan + smoke
+    needs: hadolint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build image (load into local daemon; no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: ./expense-api
+          load: true
+          tags: uptimecrew/expense-api:ci-${{ github.run_id }}
+          build-args: |
+            APP_VERSION=ci-${{ github.run_id }}
+            GIT_SHA=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Trivy scan (HIGH/CRITICAL, fixed-only, waivers apply)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: uptimecrew/expense-api:ci-${{ github.run_id }}
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: '1'
+          trivyignores: expense-api/.trivyignore
+          vuln-type: os,library
+
+      - name: Smoke — image contract (User=65532 + healthcheck present)
+        run: |
+          set -euo pipefail
+          image="uptimecrew/expense-api:ci-${{ github.run_id }}"
+          user="$(docker inspect --format '{{.Config.User}}' "$image")"
+          echo "Config.User=$user"
+          test "$user" = "65532"
+          hc="$(docker inspect --format '{{json .Config.Healthcheck.Test}}' "$image")"
+          echo "Config.Healthcheck.Test=$hc"
+          echo "$hc" | grep -q '/home/nonroot/healthcheck'
+
+      # Bounded reachability probe against the actuator readiness endpoint.
+      # NON-GATING in W5D1: the app requires Postgres/Mongo/Redis/Kafka plus
+      # the W2D1 schema to boot, and those backing services arrive in W5D2
+      # under Compose. Without them the container crashes on the JPA
+      # datasource before Tomcat binds, so the endpoint is expected to be
+      # unreachable (HTTP 000) on every attempt.
+      #
+      # We still poll so the workflow log shows the endpoint being probed
+      # (reviewer requirement + future-proofing for W5D2 when this same
+      # step should succeed unchanged). The step never fails the job on a
+      # readiness result; the gating checks are the image-contract step
+      # above (User=65532, healthcheck present) and Trivy/Hadolint.
+      #
+      # Full 200/UP smoke lands in W5D2. See
+      # expense-api/docker/SECURITY.md ("Readiness smoke scope").
+      - name: Smoke — bounded readiness poll (non-gating pre-Compose)
+        run: |
+          image="uptimecrew/expense-api:ci-${{ github.run_id }}"
+          endpoint="http://127.0.0.1:8080/actuator/health/readiness"
+          attempts=10
+          delay=3
+          container="expense-api-smoke"
+
+          # Ensure the container is cleaned up whether the poll ends via
+          # break, exhausted attempts, or an unexpected shell error. No --rm
+          # on `docker run` so `docker logs` still has a target after an
+          # early crash (the current pre-Compose reality when Hibernate
+          # can't reach Postgres).
+          cleanup() {
+            docker logs "$container" 2>&1 | tail -80 || true
+            docker rm -f "$container" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          docker run -d --name "$container" -p 8080:8080 "$image" >/dev/null
+
+          reachable=0
+          final_code="000"
+          for i in $(seq 1 "$attempts"); do
+            http_code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 "$endpoint" || true)"
+            http_code="${http_code:-000}"
+            final_code="$http_code"
+            echo "attempt $i/$attempts: $endpoint -> HTTP $http_code"
+            # 000 = no HTTP response (connection refused / timeout / dropped).
+            # Anything else — including 4xx/5xx — proves the endpoint is
+            # reachable. Readiness-UP (200) is not required until W5D2.
+            if [ "$http_code" != "000" ]; then
+              reachable=1
+              break
+            fi
+            sleep "$delay"
+          done
+
+          if [ "$reachable" -eq 1 ]; then
+            echo "Readiness endpoint reachable (HTTP $final_code). Non-2xx is expected pre-Compose; W5D2 will require 200/UP."
+          else
+            echo "::warning::Readiness did not become reachable in W5D1 smoke. This is expected before W5D2 Compose backing services/schema."
+          fi

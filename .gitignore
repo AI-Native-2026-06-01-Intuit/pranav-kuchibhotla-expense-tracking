@@ -4,3 +4,21 @@ out/
 .idea/
 .vscode/
 *.iml
+
+envs/*.env
+!envs/*.env.example
+secrets/*
+!secrets/.gitkeep
+compose-logs.txt
+
+# Kubernetes-managed dev state (W5 D3). NEVER commit any of these.
+manifests/*.local.yaml
+pod-logs.txt
+.k3d/
+
+# SAM build state (W5 D4). NEVER commit any of these.
+.aws-sam/
+samconfig.toml
+events/*.local.json
+/tmp/sam-smoke-body
+target/

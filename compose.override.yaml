@@ -1,0 +1,67 @@
+# Auto-merged local-development tweaks for `docker compose up`.
+# Adds a JDWP port on the running image and enables Spring Boot devtools restart hints.
+# The `dev` profile below adds an alternate `expense-api-dev` service that runs a locally
+# built jar bind-mounted from ./expense-api for fast rebuild loops (see scripts/dev.md).
+
+services:
+  expense-api:
+    environment:
+      SPRING_PROFILES_ACTIVE: dev
+      JAVA_TOOL_OPTIONS: >-
+        -agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5005
+        -Dspring.devtools.restart.enabled=true
+        -Dspring.devtools.restart.poll-interval=2s
+        -Dspring.devtools.restart.quiet-period=1s
+    ports:
+      - "5005:5005"
+
+  postgres:
+    # Uncomment to expose Postgres on the host for psql / GUI clients.
+    # ports:
+    #   - "5432:5432"
+
+  expense-api-dev:
+    profiles: ["dev"]
+    image: eclipse-temurin:21-jre-jammy
+    working_dir: /workspace
+    volumes:
+      - ./expense-api:/workspace
+    env_file:
+      - ./envs/expense.env
+    environment:
+      SPRING_PROFILES_ACTIVE: dev
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-expense_dev}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-expense_dev}
+      SPRING_DATASOURCE_PASSWORD_FILE: /run/secrets/pg_password
+      SPRING_CONFIG_IMPORT: optional:configtree:/run/secrets/
+    command:
+      - sh
+      - -c
+      - |
+        set -eu
+        JAR="$(ls build/libs/expense-api-*.jar 2>/dev/null | head -n1 || true)"
+        if [ -z "$$JAR" ]; then
+          echo "No jar found under build/libs. Run './gradlew :expense-api:bootJar --continuous' in another terminal." >&2
+          exit 1
+        fi
+        exec java \
+          -agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5005 \
+          -Dspring.devtools.restart.enabled=true \
+          -jar "$$JAR"
+    ports:
+      - "8081:8080"
+      - "5006:5005"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    secrets:
+      - source: pg_password
+        target: pg_password
+      - source: pg_password
+        target: spring.datasource.password
+    networks:
+      - expense_net

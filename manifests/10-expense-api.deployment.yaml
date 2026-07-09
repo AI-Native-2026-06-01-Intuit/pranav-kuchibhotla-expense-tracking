@@ -1,0 +1,98 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: expense-api
+  namespace: expense-dev
+  labels:
+    app.kubernetes.io/name: expense-api
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: expense
+    app.kubernetes.io/managed-by: kubectl
+spec:
+  replicas: 3
+  # maxUnavailable: 0 keeps the service fully available during rollouts; the
+  # HPA below floors at 2, so a single surge Pod always overlaps with the
+  # existing set before any old Pod terminates.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: expense-api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: expense-api
+        app.kubernetes.io/component: api
+        app.kubernetes.io/part-of: expense
+        app.kubernetes.io/managed-by: kubectl
+      # Placeholder checksums so pod-restart-on-config-change is wired in. In a
+      # helm/kustomize world these are computed from the rendered ConfigMap /
+      # Secret; here we keep the annotations as static placeholders and
+      # document the intent — a follow-up should replace them with real hashes
+      # when a templating layer lands.
+      annotations:
+        checksum/config: "placeholder-configmap-hash"
+        checksum/secret: "placeholder-secret-hash"
+    spec:
+      # Distroless image already runs as UID 65532; declaring it here lets the
+      # Pod be scheduled even if a future rebuild flips the base image.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        fsGroup: 65532
+      containers:
+        - name: expense-api
+          image: uptimecrew/expense-api:0.1.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: expense-api-config
+            - secretRef:
+                name: expense-api-secrets
+          env:
+            # Cap heap relative to the container memory limit; ExitOnOOM lets
+            # the kubelet's restart policy do its job instead of leaving a
+            # frozen JVM occupying the Pod slot.
+            - name: JAVA_TOOL_OPTIONS
+              value: "-XX:MaxRAMPercentage=75.0 -XX:+ExitOnOutOfMemoryError"
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              # Intentionally NO CPU limit — throttling a bursty JVM during
+              # startup masks real latency and hurts p99. Memory has a hard
+              # limit because unbounded heap growth is the only failure mode
+              # the kubelet cannot safely recover from.
+              memory: 1Gi
+          # Distroless image ships no shell, so all probes are HTTP.
+          startupProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: http
+            periodSeconds: 5
+            failureThreshold: 30
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: http
+            initialDelaySeconds: 0
+            periodSeconds: 10
+            failureThreshold: 3
+            timeoutSeconds: 3
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: http
+            initialDelaySeconds: 0
+            periodSeconds: 5
+            failureThreshold: 3
+            successThreshold: 1
+            timeoutSeconds: 3
