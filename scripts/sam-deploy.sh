@@ -11,7 +11,7 @@ REGION="${AWS_REGION:-us-east-1}"
 
 # Org SCP-mandated tags. Deploy will be denied without all three.
 TRAINEE_TAG="${TRAINEE_TAG:-pranav-kuchibhotla}"
-TEAM_TAG="${TEAM_TAG:-womm}"
+TEAM_TAG="${TEAM_TAG:-team-67}"
 ENVIRONMENT_TAG="${ENVIRONMENT_TAG:-training}"
 LOG_RETENTION_DAYS="${LOG_RETENTION_DAYS:-14}"
 

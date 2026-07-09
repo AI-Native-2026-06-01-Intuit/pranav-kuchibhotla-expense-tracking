@@ -23,7 +23,7 @@ Parameters:
     Description: Value for the org-mandated 'trainee' tag (SCP-enforced).
   TeamTag:
     Type: String
-    Default: womm
+    Default: team-67
     Description: Value for the org-mandated 'team' tag (SCP-enforced).
   EnvironmentTag:
     Type: String

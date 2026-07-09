@@ -77,7 +77,7 @@ jobs:
       STAGE: sandbox
       STACK: expense-lambda-sandbox
       TRAINEE_TAG: pranav-kuchibhotla
-      TEAM_TAG: womm
+      TEAM_TAG: team-67
       ENVIRONMENT_TAG: training
       LOG_RETENTION_DAYS: "14"
     steps:

@@ -177,7 +177,7 @@ The AWS sandbox SCP requires `trainee`, `team`, and `environment` tags on every 
 ```
 AWS_REGION=us-east-1 \
 TRAINEE_TAG=pranav-kuchibhotla \
-TEAM_TAG=womm \
+TEAM_TAG=team-67 \
 ENVIRONMENT_TAG=training \
 ./scripts/sam-deploy.sh
 ```
