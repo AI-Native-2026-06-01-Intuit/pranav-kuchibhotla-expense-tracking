@@ -41,6 +41,11 @@ public class SecurityConfig {
             .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers("/actuator/health", "/actuator/health/**").permitAll()
+                // Scraped by the kube-prometheus-stack Prometheus in-cluster via
+                // ServiceMonitor. Same public-in-dev posture as /actuator/health;
+                // a real NetworkPolicy in a shared cluster should restrict this
+                // to the monitoring namespace.
+                .requestMatchers("/actuator/prometheus", "/actuator/info").permitAll()
                 .requestMatchers("/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html").permitAll()
                 .requestMatchers("/graphql", "/graphiql/**", "/graphql/schema").permitAll()
                 .requestMatchers("/api/**").authenticated()

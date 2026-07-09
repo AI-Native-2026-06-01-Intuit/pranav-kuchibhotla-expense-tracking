@@ -1,0 +1,80 @@
+name: expense-api observability
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - w5d5-implementation
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: validate dashboards, Sloth, promtool, Gradle compile
+    runs-on: ubuntu-22.04
+    env:
+      SLOTH_IMAGE: ghcr.io/slok/sloth:v0.11.0
+      PROM_IMAGE: prom/prometheus:v2.54.0
+      YQ_IMAGE: mikefarah/yq:4
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Validate Grafana dashboard JSON
+        run: |
+          jq -e '.schemaVersion == 39 and .uid == "expense-red-v1" and (.panels | length) == 4' \
+            .grafana/dashboards/expense-api-red.json
+
+      - name: Sloth generate and diff
+        run: |
+          mkdir -p sloth-out
+          docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/work" -w /work "${SLOTH_IMAGE}" \
+            generate -i slo/expense-api.sloth.yaml -o sloth-out/expense-api-prometheusrule.yaml
+          if ! diff -u manifests/observability/expense-api-prometheusrule.yaml sloth-out/expense-api-prometheusrule.yaml; then
+            echo "::error::Sloth output drifted from committed PrometheusRule. Re-run sloth locally and commit." >&2
+            exit 1
+          fi
+
+      - name: promtool check rules (extract .spec via yq)
+        run: |
+          docker run --rm -v "$PWD:/work" -w /work "${YQ_IMAGE}" \
+            eval '.spec' manifests/observability/expense-api-prometheusrule.yaml > sloth-out/rules-only.yaml
+          docker run --rm -v "$PWD:/work" -w /work --entrypoint promtool "${PROM_IMAGE}" \
+            check rules sloth-out/rules-only.yaml
+
+      - name: Setup Java 21 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      - name: Gradle compileJava for expense-api
+        run: ./gradlew :expense-api:compileJava --no-daemon
+
+      - name: kubectl dry-run manifests (best-effort)
+        if: always()
+        run: |
+          for f in manifests/observability/*.yaml; do
+            echo "--- ${f}"
+            kubectl apply --dry-run=client -f "${f}" 2>&1 || true
+          done
+
+      - name: Upload diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: observability-diagnostics
+          path: |
+            sloth-out/
+            .grafana/dashboards/
+            manifests/observability/
+          if-no-files-found: warn
+          retention-days: 7

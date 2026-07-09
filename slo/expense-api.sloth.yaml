@@ -1,0 +1,41 @@
+# Sloth SLO spec (Kubernetes-flavored — outputs a PrometheusRule CRD).
+# Generate the PrometheusRule with:
+#   sloth generate -i slo/expense-api.sloth.yaml -o manifests/observability/expense-api-prometheusrule.yaml
+# CI (.github/workflows/observability.yml) runs the same command and fails on
+# git diff, so the generated PrometheusRule stays in sync with this input.
+apiVersion: sloth.slok.dev/v1
+kind: PrometheusServiceLevel
+metadata:
+  name: expense-api
+  namespace: expense-dev
+  labels:
+    team: expense
+    release: kube-prometheus-stack
+spec:
+  service: expense-api
+  labels:
+    team: expense
+    release: kube-prometheus-stack
+  slos:
+    - name: expense-api-latency
+      objective: 99.0
+      description: 99% of GET /api/v1/merchants/{id} requests complete under 500 ms and return a non-5xx.
+      sli:
+        events:
+          # Bad = requests slower than 500 ms OR 5xx.
+          errorQuery: (sum(rate(http_server_requests_seconds_count{app="expense-api",uri="/api/v1/merchants/{id}",status=~"5.."}[{{.window}}])) + (sum(rate(http_server_requests_seconds_count{app="expense-api",uri="/api/v1/merchants/{id}"}[{{.window}}])) - sum(rate(http_server_requests_seconds_bucket{app="expense-api",uri="/api/v1/merchants/{id}",le="0.5"}[{{.window}}]))))
+          totalQuery: sum(rate(http_server_requests_seconds_count{app="expense-api",uri="/api/v1/merchants/{id}"}[{{.window}}]))
+      alerting:
+        name: expense-apiLatencySLOBurn
+        labels:
+          team: expense
+          service: expense-api
+        annotations:
+          summary: expense-api latency SLO burn
+          description: expense-api is burning its 99% <500ms latency SLO for GET /api/v1/merchants/{id}.
+        page_alert:
+          labels:
+            severity: page
+        ticket_alert:
+          labels:
+            severity: ticket

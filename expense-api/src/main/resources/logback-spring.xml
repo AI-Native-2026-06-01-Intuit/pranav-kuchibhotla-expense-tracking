@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+  <property name="APP_NAME" value="expense-api"/>
+
+  <springProfile name="k8s,prod">
+    <appender name="STDOUT_JSON" class="ch.qos.logback.core.ConsoleAppender">
+      <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+        <includeMdcKeyName>trace_id</includeMdcKeyName>
+        <includeMdcKeyName>span_id</includeMdcKeyName>
+        <includeMdcKeyName>correlationId</includeMdcKeyName>
+        <customFields>{"app":"${APP_NAME}","env":"k8s"}</customFields>
+      </encoder>
+    </appender>
+    <root level="INFO">
+      <appender-ref ref="STDOUT_JSON"/>
+    </root>
+  </springProfile>
+
+  <springProfile name="!k8s &amp; !prod">
+    <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+      <encoder>
+        <pattern>%d{HH:mm:ss.SSS} %-5level [%thread] %logger{36} trace_id=%X{trace_id:-} span_id=%X{span_id:-} correlationId=%X{correlationId:-} - %msg%n</pattern>
+      </encoder>
+    </appender>
+    <root level="INFO">
+      <appender-ref ref="STDOUT"/>
+    </root>
+  </springProfile>
+</configuration>

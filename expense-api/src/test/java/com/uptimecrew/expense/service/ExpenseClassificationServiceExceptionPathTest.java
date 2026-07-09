@@ -76,7 +76,7 @@ class ExpenseClassificationServiceExceptionPathTest {
         ExpenseClassificationService subject =
                 new ExpenseClassificationService(
                         classifier, merchantRepository, merchantReadModelRepository,
-                        eventOutboxRepository, objectMapper);
+                        eventOutboxRepository, objectMapper, new io.micrometer.core.instrument.simple.SimpleMeterRegistry());
 
         assertThatThrownBy(() -> subject.classify(validTransaction()))
                 .isInstanceOf(UnrecognizedMerchantException.class)
@@ -95,7 +95,7 @@ class ExpenseClassificationServiceExceptionPathTest {
         ExpenseClassificationService subject =
                 new ExpenseClassificationService(
                         classifier, merchantRepository, merchantReadModelRepository,
-                        eventOutboxRepository, objectMapper);
+                        eventOutboxRepository, objectMapper, new io.micrometer.core.instrument.simple.SimpleMeterRegistry());
 
         assertThatThrownBy(() -> subject.classify(validTransaction()))
                 .isInstanceOf(TransactionParseException.class)
@@ -113,7 +113,7 @@ class ExpenseClassificationServiceExceptionPathTest {
         ExpenseClassificationService subject =
                 new ExpenseClassificationService(
                         classifier, merchantRepository, merchantReadModelRepository,
-                        eventOutboxRepository, objectMapper);
+                        eventOutboxRepository, objectMapper, new io.micrometer.core.instrument.simple.SimpleMeterRegistry());
 
         assertThatThrownBy(() -> subject.classify(validTransaction()))
                 .isInstanceOf(UnrecognizedMerchantException.class);

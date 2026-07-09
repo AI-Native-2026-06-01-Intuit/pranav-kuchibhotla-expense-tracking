@@ -183,3 +183,7 @@ ENVIRONMENT_TAG=training \
 ```
 
 The script also refuses to proceed if the target stack is in `ROLLBACK_COMPLETE`; delete it first or use a new `STACK` name.
+
+## Week 5 Day 5
+
+Week 5 Day 5 observability workflow: `./scripts/observability-apply.sh` regenerates the Sloth `PrometheusRule`, validates it with `promtool`, and applies the `ServiceMonitor` / `AlertmanagerConfig` / Grafana dashboard `ConfigMap` before patching the `expense-api` Deployment with the OTel Java agent init container; `./scripts/observability-smoke.sh` sends synthetic traffic and asserts that Prometheus, Loki, and Tempo received the corresponding metric/log/trace signals. Micrometer exposes `/actuator/prometheus`, LogstashEncoder ships JSON logs with `trace_id`/`span_id`/`correlationId` MDC keys, and the `expense_deductions_identified_total` counter is bounded to `merchant_type` × `outcome` — see [`manifests/observability/LABELS.md`](./manifests/observability/LABELS.md) for the Loki label discipline. The `.github/workflows/observability.yml` PR gate runs the jq dashboard check, Sloth drift check, `promtool check rules`, and Gradle compile — no cluster required.

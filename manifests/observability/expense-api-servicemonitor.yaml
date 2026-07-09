@@ -1,0 +1,26 @@
+# Prometheus scrape config for the expense-api Service.
+# The release: kube-prometheus-stack label is what the kube-prometheus-stack
+# Prometheus instance uses to pick up ServiceMonitors — omit it and the CR is
+# created but never scraped.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: expense-api
+  namespace: expense-dev
+  labels:
+    app.kubernetes.io/name: expense-api
+    app.kubernetes.io/part-of: expense
+    release: kube-prometheus-stack
+spec:
+  namespaceSelector:
+    matchNames:
+      - expense-dev
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: expense-api
+  endpoints:
+    - port: http
+      path: /actuator/prometheus
+      interval: 15s
+      scrapeTimeout: 10s
+      honorLabels: false

@@ -1,0 +1,79 @@
+# Grafana datasource overlay that adds Loki + Tempo on top of the
+# Prometheus/Alertmanager pair that kube-prometheus-stack provisions by
+# default, and threads the trace <-> logs pivot in BOTH directions.
+#
+# Apply as a values overlay (NOT --set-file: additionalDataSources is a
+# list, and --set-file would inject this whole file as a single string):
+#
+#   helm upgrade kube-prometheus-stack prometheus-community/kube-prometheus-stack \
+#     --version 65.1.0 --namespace monitoring --reuse-values \
+#     -f manifests/observability/helm-values/grafana-datasources.yaml \
+#     --wait --timeout 5m
+#   kubectl -n monitoring rollout restart deploy/kube-prometheus-stack-grafana
+#
+# Fixed UIDs (loki / tempo) match the cross-references below and the
+# `uid=tempo` curl in cluster-bootstrap.md; the dashboard already pins the
+# Prometheus datasource to uid=prometheus.
+#
+# Cardinality note: the ONLY span tag mapped into a Loki stream selector is
+# service.name -> the bounded `app` label. trace_id is matched as a line
+# filter / regex on the JSON body, never promoted to a Loki label. Do not
+# add merchantId / userId / correlationId here (see LABELS.md).
+grafana:
+  additionalDataSources:
+    # ------------------------------------------------------------------
+    # Loki — logs. derivedFields turns the trace_id in each JSON log line
+    # into a clickable "View trace in Tempo" link (logs -> trace pivot).
+    # ------------------------------------------------------------------
+    - name: Loki
+      uid: loki
+      type: loki
+      access: proxy
+      url: http://loki-gateway.monitoring.svc.cluster.local
+      jsonData:
+        # LogstashEncoder writes {"trace_id":"<32-hex>", ...}. Match on the
+        # body so this works whether or not trace_id is also stored as
+        # structured metadata. \w+ covers the lowercase hex W3C trace id.
+        derivedFields:
+          - name: trace_id
+            matcherType: regex
+            matcherRegex: '"trace_id":"(\w+)"'
+            # ${__value.raw} is the captured trace id; datasourceUid makes
+            # this an internal link that opens the trace in Tempo.
+            url: '${__value.raw}'
+            datasourceUid: tempo
+            urlDisplayLabel: 'View trace in Tempo'
+    # ------------------------------------------------------------------
+    # Tempo — traces. tracesToLogsV2 powers the "Logs for this span"
+    # button on every span (trace -> logs pivot). filterByTraceID rewrites
+    # the query to the same trace_id, so the split Loki pane shows exactly
+    # the log lines for that trace.
+    # ------------------------------------------------------------------
+    - name: Tempo
+      uid: tempo
+      type: tempo
+      access: proxy
+      url: http://tempo.monitoring.svc.cluster.local:3100
+      jsonData:
+        tracesToLogsV2:
+          # Open the split pane against the Loki datasource above.
+          datasourceUid: loki
+          # Spans and their log lines can straddle the query window; widen
+          # it generously so nothing is clipped.
+          spanStartTimeShift: '-1h'
+          spanEndTimeShift: '1h'
+          # Build the Loki stream selector from the span's service.name
+          # (expense-api) mapped onto the bounded `app` label -> {app="expense-api"}.
+          tags:
+            - key: 'service.name'
+              value: 'app'
+          # Append the trace's id as a line filter -> {app="expense-api"} |= "<trace_id>".
+          # This is what makes "Logs for this span" land on matching lines.
+          filterByTraceID: true
+          # Keep the whole trace's logs (do not also narrow to the span id).
+          filterBySpanID: false
+        # Service graph / node graph read span metrics from Prometheus.
+        serviceMap:
+          datasourceUid: prometheus
+        nodeGraph:
+          enabled: true

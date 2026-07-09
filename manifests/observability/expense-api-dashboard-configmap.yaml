@@ -1,0 +1,23 @@
+# Grafana dashboard delivered via the kube-prometheus-stack Grafana sidecar.
+# The sidecar picks up any ConfigMap with label grafana_dashboard=1 across the
+# namespaces it watches and loads each key as a dashboard JSON. The apply
+# script (scripts/observability-apply.sh) regenerates the data.expense-api-red.json
+# key from .grafana/dashboards/expense-api-red.json so the committed JSON is
+# always the source of truth.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: expense-api-red-dashboard
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+    app.kubernetes.io/name: expense-api
+    app.kubernetes.io/part-of: expense
+data:
+  expense-api-red.json: |
+    {
+      "schemaVersion": 39,
+      "uid": "expense-red-v1",
+      "title": "expense-api RED (regenerate via scripts/observability-apply.sh)",
+      "panels": []
+    }

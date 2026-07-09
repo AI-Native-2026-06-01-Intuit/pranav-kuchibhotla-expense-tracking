@@ -1,0 +1,116 @@
+{
+  "schemaVersion": 39,
+  "uid": "expense-red-v1",
+  "title": "expense-api RED",
+  "tags": ["expense-api", "red"],
+  "timezone": "browser",
+  "editable": true,
+  "graphTooltip": 1,
+  "time": {"from": "now-1h", "to": "now"},
+  "refresh": "30s",
+  "templating": {"list": []},
+  "annotations": {"list": []},
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Rate (req/s by route)",
+      "gridPos": {"x": 0, "y": 0, "w": 12, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {
+        "defaults": {"unit": "reqps", "min": 0},
+        "overrides": []
+      },
+      "options": {
+        "legend": {"showLegend": true, "displayMode": "table", "placement": "right"},
+        "tooltip": {"mode": "multi", "sort": "desc"}
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (route, method) (rate(http_server_requests_seconds_count{app=\"expense-api\"}[5m]))",
+          "legendFormat": "{{method}} {{route}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Errors (5xx % by route)",
+      "gridPos": {"x": 12, "y": 0, "w": 12, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {
+        "defaults": {"unit": "percentunit", "min": 0, "max": 1},
+        "overrides": []
+      },
+      "options": {
+        "legend": {"showLegend": true, "displayMode": "table", "placement": "right"},
+        "tooltip": {"mode": "multi", "sort": "desc"}
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (route) (rate(http_server_requests_seconds_count{app=\"expense-api\",status=~\"5..\"}[5m])) / clamp_min(sum by (route) (rate(http_server_requests_seconds_count{app=\"expense-api\"}[5m])), 1e-9)",
+          "legendFormat": "{{route}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Duration p50/p95/p99 (s)",
+      "gridPos": {"x": 0, "y": 8, "w": 24, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {
+        "defaults": {"unit": "s", "min": 0},
+        "overrides": []
+      },
+      "options": {
+        "legend": {"showLegend": true, "displayMode": "table", "placement": "right"},
+        "tooltip": {"mode": "multi", "sort": "desc"}
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.50, sum by (le, route) (rate(http_server_requests_seconds_bucket{app=\"expense-api\"}[5m])))",
+          "legendFormat": "p50 {{route}}",
+          "exemplar": true
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (le, route) (rate(http_server_requests_seconds_bucket{app=\"expense-api\"}[5m])))",
+          "legendFormat": "p95 {{route}}",
+          "exemplar": true
+        },
+        {
+          "refId": "C",
+          "expr": "histogram_quantile(0.99, sum by (le, route) (rate(http_server_requests_seconds_bucket{app=\"expense-api\"}[5m])))",
+          "legendFormat": "p99 {{route}}",
+          "exemplar": true
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "In-flight requests",
+      "gridPos": {"x": 0, "y": 16, "w": 24, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {
+        "defaults": {"unit": "short", "min": 0},
+        "overrides": []
+      },
+      "options": {
+        "legend": {"showLegend": true, "displayMode": "table", "placement": "right"},
+        "tooltip": {"mode": "multi", "sort": "desc"}
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (pod) (http_server_requests_active_seconds_active_count{app=\"expense-api\"})",
+          "legendFormat": "in-flight {{pod}}"
+        }
+      ]
+    }
+  ]
+}

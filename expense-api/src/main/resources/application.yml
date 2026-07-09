@@ -82,12 +82,25 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,info
+        include: health,info,prometheus
   endpoint:
     health:
       probes:
         enabled: true
-      show-details: when-authorized
+      show-details: never
+  metrics:
+    tags:
+      app: expense-api
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
+      # SLO buckets around 500ms so histogram_quantile p95/p99 aligns with the SLO
+      slo:
+        http.server.requests: 100ms,250ms,500ms,750ms,1s,2s
+  prometheus:
+    metrics:
+      export:
+        enabled: true
 
 logging:
   level:
@@ -166,3 +179,20 @@ otel:
       enabled: false
     kafka:
       enabled: false
+
+---
+spring:
+  config:
+    activate:
+      on-profile: k8s
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: never

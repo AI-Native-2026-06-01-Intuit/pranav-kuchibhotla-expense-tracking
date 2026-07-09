@@ -46,6 +46,9 @@ dependencies {
     implementation 'io.opentelemetry.instrumentation:opentelemetry-spring-kafka-2.7:2.10.0-alpha'
     implementation 'io.opentelemetry.instrumentation:opentelemetry-instrumentation-annotations:2.10.0'
 
+    implementation 'io.micrometer:micrometer-registry-prometheus'
+    implementation 'net.logstash.logback:logstash-logback-encoder:7.4'
+
     runtimeOnly    'org.springframework.boot:spring-boot-starter-jdbc'
     runtimeOnly    'org.postgresql:postgresql:42.7.3'
 

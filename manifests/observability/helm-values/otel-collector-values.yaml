@@ -1,0 +1,41 @@
+# OTel Collector values (deployment mode) that receive OTLP from the
+# expense-api Java agent and export traces to Tempo. Apply with:
+#   helm upgrade --install otel-collector open-telemetry/opentelemetry-collector \
+#     --version 0.97.0 --namespace monitoring \
+#     -f manifests/observability/helm-values/otel-collector-values.yaml
+#
+# The chart no longer ships a default image (image.repository is
+# required), and the default config has no traces pipeline exporter, so
+# spans arriving on OTLP would be dropped silently. This overlay uses
+# the contrib image and wires the traces pipeline to Tempo.
+mode: deployment
+
+image:
+  repository: otel/opentelemetry-collector-contrib
+
+# Chart-generated Service name: otel-collector-opentelemetry-collector.
+# The expense-api deployment patch points OTEL_EXPORTER_OTLP_ENDPOINT
+# at that hostname on :4317 — see
+# manifests/observability/expense-api-deployment-patch.yaml.
+config:
+  exporters:
+    otlp:
+      endpoint: tempo.monitoring.svc.cluster.local:4317
+      tls:
+        insecure: true
+    # Debug exporter tees a summary line per batch to stdout so kubectl
+    # logs shows whether spans are landing. Cheap in dev; drop it in
+    # prod.
+    debug:
+      verbosity: basic
+
+  service:
+    pipelines:
+      traces:
+        receivers:
+          - otlp
+        processors:
+          - batch
+        exporters:
+          - otlp
+          - debug
