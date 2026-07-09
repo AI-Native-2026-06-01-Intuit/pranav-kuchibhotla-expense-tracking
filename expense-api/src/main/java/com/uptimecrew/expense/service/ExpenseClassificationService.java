@@ -1,11 +1,16 @@
 package com.uptimecrew.expense.service;
 
+import java.util.EnumMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.opentelemetry.instrumentation.annotations.WithSpan;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -37,21 +42,29 @@ import com.uptimecrew.expense.repository.MerchantRepository;
 public class ExpenseClassificationService {
 
     public static final String CACHE_NAME = "expense.byId";
+    public static final String DEDUCTIONS_COUNTER_NAME = "expense_deductions_identified_total";
     private static final String MERCHANTS_TOPIC = "merchants.events";
 
     private static final Logger LOG = LoggerFactory.getLogger(ExpenseClassificationService.class);
+
+    // Bounded label values keep the metric cardinality fixed at 3 x 3 = 9 series.
+    // Adding merchantId/userId/correlationId here would blow up Prometheus.
+    enum MerchantType { synthetic, known, unknown }
+    enum Outcome { success, not_found, error }
 
     private final TransactionClassifier classifier;
     private final MerchantRepository merchantRepository;
     private final MerchantReadModelRepository merchantReadModelRepository;
     private final EventOutboxRepository eventOutboxRepository;
     private final ObjectMapper objectMapper;
+    private final Map<MerchantType, Map<Outcome, Counter>> deductionCounters;
 
     public ExpenseClassificationService(TransactionClassifier classifier,
                                         MerchantRepository merchantRepository,
                                         MerchantReadModelRepository merchantReadModelRepository,
                                         EventOutboxRepository eventOutboxRepository,
-                                        ObjectMapper objectMapper) {
+                                        ObjectMapper objectMapper,
+                                        MeterRegistry meterRegistry) {
         this.classifier = Objects.requireNonNull(classifier, "classifier must not be null");
         this.merchantRepository = Objects.requireNonNull(merchantRepository, "merchantRepository must not be null");
         this.merchantReadModelRepository = Objects.requireNonNull(
@@ -59,6 +72,32 @@ public class ExpenseClassificationService {
         this.eventOutboxRepository = Objects.requireNonNull(
                 eventOutboxRepository, "eventOutboxRepository must not be null");
         this.objectMapper = Objects.requireNonNull(objectMapper, "objectMapper must not be null");
+        Objects.requireNonNull(meterRegistry, "meterRegistry must not be null");
+        this.deductionCounters = new EnumMap<>(MerchantType.class);
+        for (MerchantType mt : MerchantType.values()) {
+            Map<Outcome, Counter> byOutcome = new EnumMap<>(Outcome.class);
+            for (Outcome oc : Outcome.values()) {
+                byOutcome.put(oc, Counter.builder(DEDUCTIONS_COUNTER_NAME)
+                        .description("Merchant lookups classified as candidate deductions.")
+                        .tag("merchant_type", mt.name())
+                        .tag("outcome", oc.name())
+                        .register(meterRegistry));
+            }
+            deductionCounters.put(mt, byOutcome);
+        }
+    }
+
+    private static MerchantType classifyMerchantType(String id) {
+        if (id == null) {
+            return MerchantType.unknown;
+        }
+        if (id.startsWith("mer_synth_")) {
+            return MerchantType.synthetic;
+        }
+        if (id.startsWith("merchant-")) {
+            return MerchantType.known;
+        }
+        return MerchantType.unknown;
     }
 
     @Transactional
@@ -103,20 +142,31 @@ public class ExpenseClassificationService {
         }
     }
 
+    @WithSpan("merchant.findById")
     @Cacheable(value = CACHE_NAME, unless = "#result == null")
     @Transactional(readOnly = true)
     public Optional<MerchantReadModel> findById(String id) {
         Objects.requireNonNull(id, "id");
 
-        LOG.info("cache miss for id={}, reading from Mongo", id);
-        Optional<MerchantReadModel> fromMongo = merchantReadModelRepository.findById(id);
-        if (fromMongo.isPresent()) {
-            return fromMongo;
-        }
+        MerchantType merchantType = classifyMerchantType(id);
+        try {
+            LOG.info("cache miss for id={}, reading from Mongo", id);
+            Optional<MerchantReadModel> fromMongo = merchantReadModelRepository.findById(id);
+            if (fromMongo.isPresent()) {
+                deductionCounters.get(merchantType).get(Outcome.success).increment();
+                return fromMongo;
+            }
 
-        LOG.info("Mongo miss for id={}, falling back to JPA", id);
-        return merchantRepository.findById(id)
-                .map(m -> toReadModel(m, deriveMccCode(m, null)));
+            LOG.info("Mongo miss for id={}, falling back to JPA", id);
+            Optional<MerchantReadModel> fromJpa = merchantRepository.findById(id)
+                    .map(m -> toReadModel(m, deriveMccCode(m, null)));
+            Outcome outcome = fromJpa.isPresent() ? Outcome.success : Outcome.not_found;
+            deductionCounters.get(merchantType).get(outcome).increment();
+            return fromJpa;
+        } catch (RuntimeException ex) {
+            deductionCounters.get(merchantType).get(Outcome.error).increment();
+            throw ex;
+        }
     }
 
     @Transactional(readOnly = true)

@@ -63,7 +63,7 @@ class ExpenseClassificationServiceMockitoTest {
         ExpenseClassificationService subject =
                 new ExpenseClassificationService(
                         classifier, merchantRepository, merchantReadModelRepository,
-                        eventOutboxRepository, objectMapper);
+                        eventOutboxRepository, objectMapper, new io.micrometer.core.instrument.simple.SimpleMeterRegistry());
 
         TransactionKind result = subject.classify(transaction);
 
@@ -90,7 +90,7 @@ class ExpenseClassificationServiceMockitoTest {
 
         ExpenseClassificationService subject = new ExpenseClassificationService(
                 classifier, merchantRepository, merchantReadModelRepository,
-                eventOutboxRepository, objectMapper);
+                eventOutboxRepository, objectMapper, new io.micrometer.core.instrument.simple.SimpleMeterRegistry());
 
         Optional<MerchantReadModel> result = subject.findById("merchant-office depot");
 
@@ -109,7 +109,7 @@ class ExpenseClassificationServiceMockitoTest {
 
         ExpenseClassificationService subject = new ExpenseClassificationService(
                 classifier, merchantRepository, merchantReadModelRepository,
-                eventOutboxRepository, objectMapper);
+                eventOutboxRepository, objectMapper, new io.micrometer.core.instrument.simple.SimpleMeterRegistry());
 
         Optional<MerchantReadModel> result = subject.findById("merchant-office depot");
 
@@ -131,7 +131,7 @@ class ExpenseClassificationServiceMockitoTest {
 
         ExpenseClassificationService subject = new ExpenseClassificationService(
                 classifier, merchantRepository, merchantReadModelRepository,
-                eventOutboxRepository, objectMapper);
+                eventOutboxRepository, objectMapper, new io.micrometer.core.instrument.simple.SimpleMeterRegistry());
 
         assertThat(subject.findById("missing")).isEmpty();
     }
