@@ -76,6 +76,10 @@ jobs:
     env:
       STAGE: sandbox
       STACK: expense-lambda-sandbox
+      TRAINEE_TAG: pranav-kuchibhotla
+      TEAM_TAG: womm
+      ENVIRONMENT_TAG: training
+      LOG_RETENTION_DAYS: "14"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -110,7 +114,16 @@ jobs:
           sam deploy \
             --stack-name "${STACK}" \
             --region "${{ vars.AWS_REGION }}" \
-            --parameter-overrides "StageName=${STAGE}" \
+            --parameter-overrides \
+              "StageName=${STAGE}" \
+              "TraineeTag=${TRAINEE_TAG}" \
+              "TeamTag=${TEAM_TAG}" \
+              "EnvironmentTag=${ENVIRONMENT_TAG}" \
+              "LogRetentionDays=${LOG_RETENTION_DAYS}" \
+            --tags \
+              "trainee=${TRAINEE_TAG}" \
+              "team=${TEAM_TAG}" \
+              "environment=${ENVIRONMENT_TAG}" \
             --capabilities CAPABILITY_IAM CAPABILITY_AUTO_EXPAND \
             --resolve-s3 \
             --no-confirm-changeset \
