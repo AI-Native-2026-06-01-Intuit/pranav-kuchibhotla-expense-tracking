@@ -171,3 +171,15 @@ W5D3 deploys expense-api to a local Kubernetes cluster (k3d) with a Deployment, 
 ## Week 5 Day 4
 
 Week 5 Day 4 serverless Lambda workflow: `./scripts/sam-deploy.sh` builds+deploys the merchant-lookup HTTP API (Java 21, arm64, SnapStart) with `template.yaml`, then `./scripts/sam-smoke.sh` verifies the deployed stack against real AWS. Local iteration uses `mvn -B -ntp test`, `sam build --use-container`, and `sam local invoke MerchantLookupFunction --event events/get-merchant.json`. The `.github/workflows/serverless.yml` CI gate runs validate/build/test/local-invoke on every PR and deploys the sandbox stack on push to `main` via GitHub Actions OIDC (no long-lived AWS keys).
+
+The AWS sandbox SCP requires `trainee`, `team`, and `environment` tags on every created resource — a deploy without them is denied. Default region is `us-east-1`. Example deploy:
+
+```
+AWS_REGION=us-east-1 \
+TRAINEE_TAG=pranav-kuchibhotla \
+TEAM_TAG=womm \
+ENVIRONMENT_TAG=training \
+./scripts/sam-deploy.sh
+```
+
+The script also refuses to proceed if the target stack is in `ROLLBACK_COMPLETE`; delete it first or use a new `STACK` name.
