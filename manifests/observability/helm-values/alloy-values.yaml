@@ -1,0 +1,53 @@
+# Alloy values that ship pod logs to Loki. Apply with:
+#   helm upgrade --install alloy grafana/alloy \
+#     --version 0.5.0 --namespace monitoring \
+#     -f manifests/observability/helm-values/alloy-values.yaml
+#   kubectl -n monitoring rollout restart daemonset alloy
+#
+# The default Alloy install runs the agent binary with an empty config
+# and does nothing. This overlay adds Kubernetes pod discovery, drops
+# only the low-cardinality labels we want in Loki (app / env / level /
+# pod / namespace / container — see manifests/observability/LABELS.md),
+# and writes to the in-cluster Loki gateway.
+alloy:
+  configMap:
+    create: true
+    content: |
+      discovery.kubernetes "pods" {
+        role = "pod"
+      }
+
+      // Keep Loki labels bounded — anything not listed here stays in the
+      // log body and is not indexed. Never label by merchantId /
+      // correlationId / userId (see LABELS.md).
+      discovery.relabel "pod_logs" {
+        targets = discovery.kubernetes.pods.targets
+
+        rule {
+          source_labels = ["__meta_kubernetes_namespace"]
+          target_label  = "namespace"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_name"]
+          target_label  = "pod"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_label_app_kubernetes_io_name"]
+          target_label  = "app"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_container_name"]
+          target_label  = "container"
+        }
+      }
+
+      loki.source.kubernetes "pod_logs" {
+        targets    = discovery.relabel.pod_logs.output
+        forward_to = [loki.write.default.receiver]
+      }
+
+      loki.write "default" {
+        endpoint {
+          url = "http://loki-gateway.monitoring.svc.cluster.local/loki/api/v1/push"
+        }
+      }
