@@ -35,7 +35,7 @@ jobs:
       - name: Sloth generate and diff
         run: |
           mkdir -p sloth-out
-          docker run --rm -v "$PWD:/work" -w /work "${SLOTH_IMAGE}" \
+          docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/work" -w /work "${SLOTH_IMAGE}" \
             generate -i slo/expense-api.sloth.yaml -o sloth-out/expense-api-prometheusrule.yaml
           if ! diff -u manifests/observability/expense-api-prometheusrule.yaml sloth-out/expense-api-prometheusrule.yaml; then
             echo "::error::Sloth output drifted from committed PrometheusRule. Re-run sloth locally and commit." >&2
