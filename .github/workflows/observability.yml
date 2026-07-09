@@ -2,23 +2,12 @@ name: expense-api observability
 
 on:
   pull_request:
-    paths:
-      - "expense-api/**"
-      - "manifests/observability/**"
-      - ".grafana/dashboards/**"
-      - "slo/**"
-      - "scripts/observability-*.sh"
-      - ".github/workflows/observability.yml"
-  push:
     branches:
       - main
-    paths:
-      - "expense-api/**"
-      - "manifests/observability/**"
-      - ".grafana/dashboards/**"
-      - "slo/**"
-      - "scripts/observability-*.sh"
-      - ".github/workflows/observability.yml"
+  push:
+    branches:
+      - w5d5-implementation
+  workflow_dispatch:
 
 permissions:
   contents: read
