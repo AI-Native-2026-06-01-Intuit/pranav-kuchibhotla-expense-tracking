@@ -22,3 +22,8 @@ samconfig.toml
 events/*.local.json
 /tmp/sam-smoke-body
 target/
+
+# Observability generation/exports (W5 D5). NEVER commit any of these.
+.grafana/exported/
+sloth-out/
+/tmp/observability-smoke-*
