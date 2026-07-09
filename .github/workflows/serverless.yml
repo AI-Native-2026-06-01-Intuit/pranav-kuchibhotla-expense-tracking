@@ -1,0 +1,164 @@
+name: expense-merchant-lookup serverless
+
+on:
+  pull_request:
+    paths:
+      - "template.yaml"
+      - "src/**"
+      - "pom.xml"
+      - "events/**"
+      - "scripts/sam-*.sh"
+      - ".github/workflows/serverless.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "template.yaml"
+      - "src/**"
+      - "pom.xml"
+      - "events/**"
+      - "scripts/sam-*.sh"
+      - ".github/workflows/serverless.yml"
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  validate-build-test:
+    name: sam validate, mvn test, sam build, sam local invoke
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java 21 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      - name: Setup SAM CLI
+        uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
+
+      - name: sam validate --lint
+        run: sam validate --lint
+
+      - name: mvn test
+        run: mvn -B -ntp test
+
+      - name: mvn package
+        run: mvn -B -ntp package -DskipTests
+
+      - name: sam build
+        run: sam build --use-container
+
+      - name: sam local invoke MerchantLookupFunction
+        run: sam local invoke MerchantLookupFunction --event events/get-merchant.json
+
+      - name: Upload .aws-sam/build artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aws-sam-build
+          path: .aws-sam/build
+          if-no-files-found: warn
+          retention-days: 7
+
+  deploy-sandbox:
+    name: Deploy sandbox stack
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: validate-build-test
+    runs-on: ubuntu-22.04
+    env:
+      STAGE: sandbox
+      STACK: expense-lambda-sandbox
+      TRAINEE_TAG: pranav-kuchibhotla
+      TEAM_TAG: team-67
+      ENVIRONMENT_TAG: training
+      LOG_RETENTION_DAYS: "14"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java 21 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      - name: Setup SAM CLI
+        uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: gha-expense-merchant-lookup-${{ github.run_id }}
+
+      - name: mvn package
+        run: mvn -B -ntp package -DskipTests
+
+      - name: sam build
+        run: sam build --use-container
+
+      - name: sam deploy
+        run: |
+          sam deploy \
+            --stack-name "${STACK}" \
+            --region "${{ vars.AWS_REGION }}" \
+            --parameter-overrides \
+              "StageName=${STAGE}" \
+              "TraineeTag=${TRAINEE_TAG}" \
+              "TeamTag=${TEAM_TAG}" \
+              "EnvironmentTag=${ENVIRONMENT_TAG}" \
+              "LogRetentionDays=${LOG_RETENTION_DAYS}" \
+            --tags \
+              "trainee=${TRAINEE_TAG}" \
+              "team=${TEAM_TAG}" \
+              "environment=${ENVIRONMENT_TAG}" \
+            --capabilities CAPABILITY_IAM CAPABILITY_AUTO_EXPAND \
+            --resolve-s3 \
+            --no-confirm-changeset \
+            --no-fail-on-empty-changeset
+
+      - name: Run smoke tests
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+        run: ./scripts/sam-smoke.sh
+
+      - name: Capture diagnostics on failure
+        if: failure()
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+        run: |
+          mkdir -p sam-diagnostics
+          aws cloudformation describe-stack-events \
+            --stack-name "${STACK}" \
+            --region "${AWS_REGION}" \
+            --max-items 40 \
+            > sam-diagnostics/stack-events.json || true
+          aws logs tail "/aws/lambda/expense-merchant-lookup-${STAGE}" \
+            --region "${AWS_REGION}" \
+            --since 15m \
+            > sam-diagnostics/lambda-logs.txt || true
+          aws cloudformation describe-stacks \
+            --stack-name "${STACK}" \
+            --region "${AWS_REGION}" \
+            > sam-diagnostics/stack.json || true
+
+      - name: Upload sam-diagnostics artifact
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sam-diagnostics
+          path: sam-diagnostics
+          if-no-files-found: warn
+          retention-days: 7
