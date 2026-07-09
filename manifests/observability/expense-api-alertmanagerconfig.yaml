@@ -1,0 +1,36 @@
+# AlertmanagerConfig routes alerts from the Prometheus operator to a receiver
+# scoped to the expense team. Uses the null receiver so committing this file
+# is safe in a shared repo; wire a real Slack/PagerDuty receiver in a local
+# override before applying to a stage/prod cluster.
+apiVersion: monitoring.coreos.com/v1alpha1
+kind: AlertmanagerConfig
+metadata:
+  name: expense-api
+  namespace: expense-dev
+  labels:
+    app.kubernetes.io/name: expense-api
+    app.kubernetes.io/part-of: expense
+    team: expense
+spec:
+  route:
+    groupBy: ["alertname", "service"]
+    groupWait: 30s
+    groupInterval: 5m
+    repeatInterval: 4h
+    receiver: expense-null
+    matchers:
+      - name: team
+        value: expense
+        matchType: "="
+    routes:
+      - receiver: expense-null
+        matchers:
+          - name: severity
+            value: page
+            matchType: "="
+        groupWait: 10s
+        repeatInterval: 1h
+  receivers:
+    - name: expense-null
+      # No integrations — this is a placeholder so the manifest is valid
+      # cluster-wide without leaking a webhook URL into the repo.

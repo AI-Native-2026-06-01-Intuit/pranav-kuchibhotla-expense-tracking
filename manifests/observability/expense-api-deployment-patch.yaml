@@ -1,0 +1,62 @@
+# Strategic merge patch that adds the OpenTelemetry Java agent as an init-
+# container payload without touching image/resources/probes/ports. Apply with:
+#   kubectl patch deployment expense-api -n expense-dev \
+#     --patch-file manifests/observability/expense-api-deployment-patch.yaml
+#
+# JAVA_TOOL_OPTIONS is overwritten by strategic-merge (env is a keyed list on
+# `name`), so we deliberately combine the OTel javaagent with the existing
+# heap flags from 10-expense-api.deployment.yaml — losing the heap flags would
+# regress OOM behavior on cold start.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: expense-api
+  namespace: expense-dev
+spec:
+  template:
+    spec:
+      volumes:
+        - name: otel-agent
+          emptyDir: {}
+      initContainers:
+        - name: otel-agent-downloader
+          image: curlimages/curl:8.11.1
+          command:
+            - sh
+            - -c
+            - |
+              set -eu
+              curl -sSfL -o /otel/opentelemetry-javaagent.jar \
+                https://github.com/open-telemetry/opentelemetry-java-instrumentation/releases/download/v2.5.0/opentelemetry-javaagent.jar
+              ls -l /otel/opentelemetry-javaagent.jar
+          volumeMounts:
+            - name: otel-agent
+              mountPath: /otel
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+      containers:
+        - name: expense-api
+          volumeMounts:
+            - name: otel-agent
+              mountPath: /otel
+              readOnly: true
+          env:
+            - name: JAVA_TOOL_OPTIONS
+              value: "-javaagent:/otel/opentelemetry-javaagent.jar -XX:MaxRAMPercentage=75.0 -XX:+ExitOnOutOfMemoryError"
+            - name: OTEL_SERVICE_NAME
+              value: expense-api
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: http://otel-collector-opentelemetry-collector.monitoring.svc.cluster.local:4317
+            - name: OTEL_EXPORTER_OTLP_PROTOCOL
+              value: grpc
+            - name: OTEL_TRACES_SAMPLER
+              value: parentbased_traceidratio
+            - name: OTEL_TRACES_SAMPLER_ARG
+              value: "0.1"
+            - name: OTEL_METRICS_EXPORTER
+              value: none
+            - name: OTEL_LOGS_EXPORTER
+              value: none
+            - name: SPRING_PROFILES_ACTIVE
+              value: k8s
