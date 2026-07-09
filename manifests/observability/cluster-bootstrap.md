@@ -135,18 +135,31 @@ The Deployment's OTel init container will send OTLP/gRPC to
 
 `kube-prometheus-stack` only ships Prometheus + Alertmanager as
 provisioned datasources. Add Loki and Tempo, and thread the
-trace ↔ logs pivot, with a re-usable overlay:
+trace ↔ logs pivot, with a re-usable overlay. `additionalDataSources` is
+a *list*, so it must be merged as a values file (`-f`) — `--set-file`
+would inject the whole file as one string and break provisioning:
 
 ```
 helm upgrade kube-prometheus-stack prometheus-community/kube-prometheus-stack \
   --version 65.1.0 \
   --namespace monitoring \
   --reuse-values \
-  --set-file 'grafana.additionalDataSources=manifests/observability/helm-values/grafana-datasources.yaml' \
+  -f manifests/observability/helm-values/grafana-datasources.yaml \
   --wait --timeout 5m
 
 kubectl -n monitoring rollout restart deploy/kube-prometheus-stack-grafana
 ```
+
+The overlay wires the pivot both ways and keeps trace_id out of the Loki
+labels (matched on the JSON body / as a line filter instead):
+
+- **Tempo → logs**: `tracesToLogsV2` on the Tempo datasource maps the
+  span's `service.name` onto the bounded `app` label and sets
+  `filterByTraceID`, so each span's **Logs for this span** button opens a
+  split Loki pane querying `{app="expense-api"} |= "<trace_id>"`.
+- **logs → Tempo**: `derivedFields` on the Loki datasource extracts
+  `trace_id` from the JSON log line and renders a **View trace in Tempo**
+  link.
 
 If Grafana's datasource-settings page ever shows `Unable to connect to
 Tempo` for the Tempo datasource, that is Grafana's health probe hitting

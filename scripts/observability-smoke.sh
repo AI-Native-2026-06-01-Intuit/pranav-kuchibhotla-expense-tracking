@@ -5,6 +5,8 @@
 #   2. Prometheus has expense_deductions_identified_total after traffic
 #   3. Loki has a matching log line (correlation id in the body)
 #   4. Tempo has a trace for service.name=expense-api
+#   5. trace -> logs pivot: a Tempo trace id resolves to Loki lines that
+#      carry the same trace_id (best-effort; traces sample at 10% in k8s)
 # Prints diagnostics on failure. Never fakes success — if the stack is missing
 # or endpoints are unreachable it exits non-zero.
 
@@ -132,7 +134,7 @@ else
   echo "  correlation id present: ok"
 fi
 
-echo "[5/5] Tempo assertion (service.name=expense-api)"
+echo "[5/6] Tempo assertion (service.name=expense-api)"
 TEMPO_URL="http://127.0.0.1:13200"
 TEMPO_JSON="$(curl -sS -G "${TEMPO_URL}/api/search" \
   --data-urlencode "tags=service.name=expense-api" \
@@ -141,6 +143,31 @@ echo "${TEMPO_JSON}" > "${DIAG_DIR}/tempo-search.json"
 if ! echo "${TEMPO_JSON}" | grep -q '"traceID"'; then
   echo "[smoke] Tempo returned no traces for service.name=expense-api." >&2
   exit 8
+fi
+
+echo "[6/6] trace -> logs pivot (Grafana tracesToLogsV2 shape)"
+# Pull one trace id out of the Tempo search result and reproduce the query
+# Grafana's "Logs for this span" button runs: {app="expense-api"} |= "<trace id>".
+# This proves trace_id reaches Loki as a body field with no ID labels. It is
+# best-effort: with 10% trace sampling the sampled trace's log lines may fall
+# outside the 5-minute window, so a miss WARNs rather than fails.
+TRACE_ID="$(echo "${TEMPO_JSON}" | grep -o '"traceID":"[0-9a-f]*"' | head -n1 | sed 's/.*:"//;s/"//')"
+if [ -z "${TRACE_ID}" ]; then
+  echo "  WARN: could not parse a traceID out of the Tempo response — skipping pivot check."
+else
+  echo "  querying Loki for trace_id=${TRACE_ID}"
+  PIVOT_JSON="$(curl -sS -G "${LOKI_URL}/loki/api/v1/query_range" \
+    --data-urlencode "query={app=\"expense-api\"} |= \"${TRACE_ID}\"" \
+    --data-urlencode "start=${FIVE_MIN_AGO_NS}" \
+    --data-urlencode "end=${NOW_NS}" \
+    --data-urlencode "limit=50" || true)"
+  echo "${PIVOT_JSON}" > "${DIAG_DIR}/loki-pivot.json"
+  if echo "${PIVOT_JSON}" | grep -q "${TRACE_ID}"; then
+    echo "  pivot ok: Loki has lines carrying trace_id=${TRACE_ID}"
+  else
+    echo "  WARN: no Loki line for trace_id=${TRACE_ID} in the last 5 min"
+    echo "        (expected under 10% sampling if this trace's request was not logged in-window)."
+  fi
 fi
 
 echo
