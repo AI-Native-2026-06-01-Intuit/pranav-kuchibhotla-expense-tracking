@@ -129,7 +129,7 @@ disclosed:
 
 ```bash
 cd expense-api/docker
-docker run --rm -v "$PWD":/src -w /src golang:1.26.4-alpine sh -c '
+docker run --rm -v "$PWD":/src -w /src golang:1.26.5-alpine sh -c '
   CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o healthcheck-arm64 healthcheck.go &&
   CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o healthcheck-amd64 healthcheck.go
 '
