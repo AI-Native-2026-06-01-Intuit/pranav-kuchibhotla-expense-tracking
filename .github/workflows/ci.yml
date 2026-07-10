@@ -1,0 +1,58 @@
+name: expense-api CI
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "expense-api/**"
+      - ".github/workflows/ci.yml"
+      - ".github/workflows/_build-and-push.yml"
+      - ".github/actions/setup-build/**"
+  push:
+    branches: [main]
+    paths:
+      - "expense-api/**"
+      - ".github/workflows/ci.yml"
+      - ".github/workflows/_build-and-push.yml"
+      - ".github/actions/setup-build/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: expense-api-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    name: Build and test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Setup build environment
+        uses: ./.github/actions/setup-build
+
+      - name: Gradle build
+        working-directory: expense-api
+        run: ./gradlew --no-daemon --stacktrace build
+
+      - name: Upload test report
+        if: always()
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: expense-api-test-report
+          path: expense-api/build/reports/tests/test
+          if-no-files-found: ignore
+          retention-days: 7
+
+  call-build-and-push:
+    name: Build and push image
+    needs: build-test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/_build-and-push.yml
+    permissions:
+      contents: read
+      id-token: write
+    with:
+      image-tag: ${{ github.sha }}
+      also-tag-main: true
