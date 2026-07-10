@@ -19,12 +19,22 @@ makes AWS access possible without long-lived credentials.
 - Triggers on `pull_request` to `main` and on `push` to `main`, both restricted
   to paths under `expense-api/**` and the CI-owning workflow/action files.
 - `build-test` job runs on every PR and every push to `main` using the
-  `setup-build` composite action (checkout + Temurin 21 + Gradle cache), then
+  `setup-build` composite action (Temurin 21 + Gradle cache), then
   `./gradlew build`. Test reports upload as an artifact.
 - `call-build-and-push` job runs **only** on push to `main` (guarded by
   `if: github.event_name == 'push' && github.ref == 'refs/heads/main'`) and
   invokes the reusable `_build-and-push.yml` workflow. Pull requests never
   push images.
+
+**Unit vs integration tests.** `./gradlew build` runs unit tests only
+(`*Test.java`); `*IT.java` classes are excluded from the `test` task and run
+under a separate `integrationTest` task. Integration tests require a running
+Docker daemon plus Testcontainers-managed Postgres, Kafka, Mongo, and Redis,
+and are not part of the CI gate — they run locally when a developer has
+Docker configured, or in a dedicated integration environment. Branch
+coverage verification (`jacocoTestCoverageVerification`) is measured over
+the unit-test run only, so the gate reflects what unit tests actually cover
+rather than what the wiring exercises transitively.
 
 ### `.github/workflows/_build-and-push.yml`
 
