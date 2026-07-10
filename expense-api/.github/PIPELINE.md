@@ -45,7 +45,11 @@ Reusable workflow triggered via `workflow_call`. Typed inputs: `image-tag`,
 2. `./gradlew bootJar -x test` to produce the runnable jar.
 3. `docker/build-push-action` builds the image locally (`load: true`).
 4. Trivy scan with `severity: HIGH,CRITICAL` and `exit-code: 1` — HIGH or
-   CRITICAL findings fail the workflow.
+   CRITICAL findings fail the workflow. Waivers are loaded from
+   `expense-api/.trivyignore`, which tracks each waived CVE ID together
+   with its remediation plan and next-review date in
+   `expense-api/docker/SECURITY.md`. The gate still fires on any new CVE
+   that isn't already in the waiver list.
 5. `aws-actions/configure-aws-credentials` assumes the build role via OIDC.
 6. `aws-actions/amazon-ecr-login` obtains an ECR docker login.
 7. Push image tagged with the git SHA. Optionally also push `:main`.
