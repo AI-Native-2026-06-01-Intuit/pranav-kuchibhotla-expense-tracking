@@ -1,0 +1,73 @@
+name: expense-api Deploy (prod)
+
+on:
+  workflow_dispatch:
+    inputs:
+      image-sha:
+        description: 40-character git SHA of the image tag to promote to prod.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: expense-api-deploy-prod
+  cancel-in-progress: false
+
+jobs:
+  validate-input:
+    name: Validate image SHA
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Assert 40-hex image SHA
+        env:
+          IMAGE_SHA: ${{ inputs.image-sha }}
+        run: |
+          set -euo pipefail
+          if ! printf '%s' "${IMAGE_SHA}" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error::image-sha must be exactly 40 lowercase hex characters. got: ${IMAGE_SHA}" >&2
+            exit 1
+          fi
+          echo "image-sha OK: ${IMAGE_SHA}"
+
+  deploy:
+    name: Deploy to prod
+    needs: validate-input
+    runs-on: ubuntu-24.04
+    environment: prod
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AWS_REGION: us-east-1
+      ECR_REPOSITORY: uptimecrew/expense-api
+      PROD_ROLE_ARN: arn:aws:iam::726695008378:role/expense-api-prod-deploy
+    steps:
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@5579c002bb4778aa43395ef1df492868a9a1c83f # v4.0.2
+        with:
+          role-to-assume: ${{ env.PROD_ROLE_ARN }}
+          role-session-name: gha-deploy-prod-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Verify ECR image exists
+        env:
+          IMAGE_SHA: ${{ inputs.image-sha }}
+        run: |
+          set -euo pipefail
+          echo "checking image ${ECR_REPOSITORY}:${IMAGE_SHA} in ${AWS_REGION}"
+          aws ecr describe-images \
+            --region "${AWS_REGION}" \
+            --repository-name "${ECR_REPOSITORY}" \
+            --image-ids imageTag="${IMAGE_SHA}" \
+            --query 'imageDetails[0].{digest:imageDigest,pushedAt:imagePushedAt,tags:imageTags}' \
+            --output table
+
+      - name: Deploy placeholder
+        env:
+          IMAGE_SHA: ${{ inputs.image-sha }}
+        run: |
+          echo "::notice::would deploy expense-api tag=${IMAGE_SHA} to prod (deploy target wired in a later day)"
