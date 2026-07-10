@@ -77,10 +77,12 @@ it relies on the exclusion filter to permit re-tagging in place.
 
 ### `.github/actions/setup-build/action.yml`
 
-Composite action that runs `actions/checkout`, `actions/setup-java` with
-Temurin 21, and `gradle/actions/setup-gradle` for Gradle build caching.
-Cache is `read-only` on branches other than `main` so PRs cannot poison the
-cache.
+Composite action that runs `actions/setup-java` with Temurin 21 and
+`gradle/actions/setup-gradle` for Gradle build caching. Cache is
+`read-only` on branches other than `main` so PRs cannot poison the cache.
+Callers are responsible for running `actions/checkout` before invoking
+this composite — a local action reference (`./.github/actions/setup-build`)
+is only resolvable once the runner has checked the repo out.
 
 ## OIDC roles
 

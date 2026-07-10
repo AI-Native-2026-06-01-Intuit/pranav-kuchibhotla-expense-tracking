@@ -1,22 +1,13 @@
 name: setup-build
-description: Checkout, install Temurin JDK 21, and configure Gradle build caching for expense-api.
+description: Install Temurin JDK 21 and configure Gradle build caching for expense-api. Callers must run actions/checkout before invoking this composite.
 inputs:
   java-version:
     description: Temurin major version to install.
     required: false
     default: "21"
-  fetch-depth:
-    description: Number of commits to fetch. 0 fetches full history.
-    required: false
-    default: "1"
 runs:
   using: composite
   steps:
-    - name: Checkout
-      uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      with:
-        fetch-depth: ${{ inputs.fetch-depth }}
-
     - name: Setup Temurin JDK
       uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00 # v4.7.1
       with:
