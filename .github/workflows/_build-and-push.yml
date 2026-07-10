@@ -27,6 +27,16 @@ on:
         required: false
         type: string
         default: arn:aws:iam::726695008378:role/expense-api-build-push
+      app-path:
+        description: Repo-relative directory of the service to build (Gradle project dir, Dockerfile context, and .trivyignore location).
+        required: false
+        type: string
+        default: expense-api
+      local-image-name:
+        description: Local docker image name used before ECR retagging.
+        required: false
+        type: string
+        default: expense-api
 
 permissions:
   contents: read
@@ -47,7 +57,7 @@ jobs:
         uses: ./.github/actions/setup-build
 
       - name: Build Spring Boot jar
-        working-directory: expense-api
+        working-directory: ${{ inputs.app-path }}
         run: ./gradlew --no-daemon --stacktrace bootJar -x test
 
       - name: Setup Buildx
@@ -56,22 +66,22 @@ jobs:
       - name: Build image (load to local docker)
         uses: docker/build-push-action@48aba3b46d1b1fec4febb7c5d0c644b249a11355 # v6.10.0
         with:
-          context: expense-api
-          file: expense-api/Dockerfile
+          context: ${{ inputs.app-path }}
+          file: ${{ inputs.app-path }}/Dockerfile
           load: true
           push: false
-          tags: expense-api:${{ inputs.image-tag }}
+          tags: ${{ inputs.local-image-name }}:${{ inputs.image-tag }}
 
       - name: Trivy scan (HIGH/CRITICAL gate)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: expense-api:${{ inputs.image-tag }}
+          image-ref: ${{ inputs.local-image-name }}:${{ inputs.image-tag }}
           format: table
           severity: HIGH,CRITICAL
           exit-code: "1"
           ignore-unfixed: true
           vuln-type: os,library
-          trivyignores: expense-api/.trivyignore
+          trivyignores: ${{ inputs.app-path }}/.trivyignore
 
       - name: Configure AWS credentials via OIDC
         uses: aws-actions/configure-aws-credentials@5579c002bb4778aa43395ef1df492868a9a1c83f # v4.0.2
@@ -89,9 +99,10 @@ jobs:
           REGISTRY: ${{ steps.ecr-login.outputs.registry }}
           REPO: ${{ inputs.ecr-repository }}
           SHA_TAG: ${{ inputs.image-tag }}
+          LOCAL_IMAGE: ${{ inputs.local-image-name }}
         run: |
           set -euo pipefail
-          SRC="expense-api:${SHA_TAG}"
+          SRC="${LOCAL_IMAGE}:${SHA_TAG}"
           DST_SHA="${REGISTRY}/${REPO}:${SHA_TAG}"
           docker tag "${SRC}" "${DST_SHA}"
           docker push "${DST_SHA}"
@@ -102,9 +113,10 @@ jobs:
           REGISTRY: ${{ steps.ecr-login.outputs.registry }}
           REPO: ${{ inputs.ecr-repository }}
           SHA_TAG: ${{ inputs.image-tag }}
+          LOCAL_IMAGE: ${{ inputs.local-image-name }}
         run: |
           set -euo pipefail
-          SRC="expense-api:${SHA_TAG}"
+          SRC="${LOCAL_IMAGE}:${SHA_TAG}"
           DST_MAIN="${REGISTRY}/${REPO}:main"
           docker tag "${SRC}" "${DST_MAIN}"
           docker push "${DST_MAIN}"
