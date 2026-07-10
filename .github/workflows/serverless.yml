@@ -30,17 +30,17 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Setup Java 21 (Temurin)
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00 # v4.7.1
         with:
           distribution: temurin
           java-version: "21"
           cache: maven
 
       - name: Setup SAM CLI
-        uses: aws-actions/setup-sam@v2
+        uses: aws-actions/setup-sam@f84ec7d548307efafe33230528756de3c5841a17 # v2
         with:
           use-installer: true
 
@@ -61,7 +61,7 @@ jobs:
 
       - name: Upload .aws-sam/build artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
         with:
           name: aws-sam-build
           path: .aws-sam/build
@@ -82,22 +82,22 @@ jobs:
       LOG_RETENTION_DAYS: "14"
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Setup Java 21 (Temurin)
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00 # v4.7.1
         with:
           distribution: temurin
           java-version: "21"
           cache: maven
 
       - name: Setup SAM CLI
-        uses: aws-actions/setup-sam@v2
+        uses: aws-actions/setup-sam@f84ec7d548307efafe33230528756de3c5841a17 # v2
         with:
           use-installer: true
 
       - name: Configure AWS credentials via OIDC
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@5579c002bb4778aa43395ef1df492868a9a1c83f # v4.0.2
         with:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
@@ -156,7 +156,7 @@ jobs:
 
       - name: Upload sam-diagnostics artifact
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
         with:
           name: sam-diagnostics
           path: sam-diagnostics

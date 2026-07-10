@@ -39,7 +39,11 @@ rather than what the wiring exercises transitively.
 ### `.github/workflows/_build-and-push.yml`
 
 Reusable workflow triggered via `workflow_call`. Typed inputs: `image-tag`,
-`also-tag-main`, `aws-region`, `ecr-repository`, `build-role-arn`. Steps:
+`also-tag-main`, `aws-region`, `ecr-repository`, `build-role-arn`,
+`app-path` (default `expense-api`), and `local-image-name` (default
+`expense-api`). `app-path` parameterizes the Gradle working directory,
+Dockerfile context, and `.trivyignore` location so a second service can
+reuse this workflow. Steps:
 
 1. `setup-build` composite for checkout + JDK + Gradle cache.
 2. `./gradlew bootJar -x test` to produce the runnable jar.
@@ -177,9 +181,34 @@ gate is scoped to the four W6D1-owned files listed above.
   the GitHub UI setting.
 - **GitHub Environment provisioning.** Creating `dev` and `prod` environments
   via `gh api` returned HTTP 403 (`Must have admin rights to Repository`).
-  The environments must be created in the GitHub UI by a repo admin (Settings
-  → Environments → New environment) before `deploy-prod.yml` can run. This
-  does not affect CI or the reusable build-and-push workflow.
+  The environments must be created in the GitHub UI by a repo admin. This
+  does not affect CI or the reusable build-and-push workflow, but
+  `deploy-prod.yml` will fail on first run until `prod` exists.
+
+  **Manual UI steps (repo admin required):**
+
+  1. Open `Settings → Environments → New environment`.
+  2. Name it `dev`. Leave "Required reviewers" and "Wait timer" empty
+     (cohort waiver above). Under "Deployment branches and tags",
+     select "All branches". Click "Save protection rules".
+  3. Repeat for `prod` with these differences:
+     - Under "Deployment branches and tags", select
+       "Selected branches and tags".
+     - Click "Add deployment branch or tag rule" and enter `main`.
+       This scopes the OIDC subject claim `environment:prod` to workflow
+       runs originating from `refs/heads/main`, matching the trust policy
+       on `arn:aws:iam::726695008378:role/expense-api-prod-deploy`.
+     - Do **not** add required reviewers.
+  4. Verify from a shell:
+
+     ```sh
+     gh api /repos/AI-Native-2026-06-01-Intuit/pranav-kuchibhotla-expense-tracking/environments \
+       --jq '.environments[] | {name, deployment_branch_policy}'
+     ```
+
+     Expected: two entries. `prod` should show a `deployment_branch_policy`
+     with `custom_branch_policies: true`. `dev` should show `null` (no
+     policy = all branches allowed).
 
 ## PR behavior
 
