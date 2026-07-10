@@ -1,0 +1,37 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+
+  - package-ecosystem: github-actions
+    directory: /.github/actions/setup-build
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+
+  - package-ecosystem: gradle
+    directory: /expense-api
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    groups:
+      gradle:
+        patterns:
+          - "*"
+
+  - package-ecosystem: docker
+    directory: /expense-api
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
