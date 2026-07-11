@@ -178,14 +178,25 @@ mistaken for GitOps bugs:
    `Synced` and `Unknown` until Argo CD is upgraded to a build with the
    updated schema (>= v2.12). Upgrading Argo CD is the clean fix.
 
-2. **Staging / prod app pods CrashLoop.** The `expense-api` container in
-   `overlays/{staging,prod}` starts and then fails Hibernate init with
-   `Unable to determine Dialect without JDBC metadata` — the ConfigMap in
-   those overlays does not point at a reachable Postgres. This is an app
-   configuration gap unrelated to GitOps; Argo correctly reports the
-   Applications as `Synced` (git desired state applied) and `Degraded`
-   (workload not Healthy), which is precisely the signal the pipeline
-   should surface. Fix belongs in the config repo overlays, not here.
+2. **Staging / prod dependency stack.** The initial staging/prod build
+   crashlooped on `Unable to determine Dialect without JDBC metadata`
+   because those overlays had no reachable Postgres/Redis/Mongo/Kafka —
+   dev inherits them from the W5D3 `k8s-up.sh` apply flow, but that flow
+   was never wired for the two other namespaces. Fixed by adding a
+   namespace-neutral dependency stack under `deps/` in the config repo
+   (Postgres+initdb ConfigMap, Redis, Mongo, Kafka) that staging and prod
+   include via `resources: [../../deps]`. Dev deliberately does NOT
+   include `deps/` — its dependencies are still managed out-of-band by
+   the W5D3 flow, and duplicating them here would collide with the
+   already-running kubectl-owned copies. After this fix, all three
+   Applications report `Synced` + `Healthy`:
+
+   ```
+   NAME                  SYNC STATUS   HEALTH STATUS
+   expense-api-dev       Synced        Healthy
+   expense-api-prod      Synced        Healthy
+   expense-api-staging   Synced        Healthy
+   ```
 
 3. **Live targetRevision is `w6d2-implementation` for local verification.**
    The committed YAML in the config repo (both `Application` and
