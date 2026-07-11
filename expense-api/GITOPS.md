@@ -100,7 +100,20 @@ kubectl -n expense-dev get deploy/expense-api -o jsonpath='{.spec.replicas}'
 # expected: back to overlays/dev value (1)
 ```
 
-<!-- self-heal-log-excerpt: PENDING (attach after applying to k3d-expense) -->
+<!-- self-heal-log-excerpt: CAPTURED 2026-07-11 on k3d-expense.
+Procedure:
+  kubectl -n expense-dev scale deploy/expense-api --replicas=3
+  # wait ~30s
+  kubectl -n expense-dev get deploy expense-api -o jsonpath='{.spec.replicas}'
+Result (argocd-application-controller log excerpt):
+  11:08:25Z Updated sync status: Synced -> OutOfSync application=expense-api-dev
+  11:08:25Z Initialized new operation: {SyncOperation Prune:true ... Resources:[apps/Deployment/expense-api]}
+  11:08:25Z Syncing application=argocd/expense-api-dev syncId=00001-nifsp
+  11:08:25Z Adding resource result, status: 'Synced', message: 'deployment.apps/expense-api configured'
+  11:08:25Z Partial sync operation ... succeeded reason=OperationCompleted
+  11:08:25Z Updated sync status: OutOfSync -> Synced
+Live confirm: kubectl -n expense-dev get deploy expense-api -o jsonpath='{.spec.replicas}' => 1
+-->
 
 ## Project-scoped RBAC
 
@@ -149,6 +162,38 @@ Result (kubectl -n argocd get application rogue-kube-system -o jsonpath='{.statu
      namespace 'kube-system' do not match any of the allowed destinations
      in project 'expense'"}]
 -->
+
+## Local verification caveats (k3d + Argo CD v2.11.7)
+
+Two orthogonal issues surfaced while verifying end-to-end on `k3d-expense`
+(k3s v1.35.5) with Argo CD v2.11.7; both are documented so they aren't
+mistaken for GitOps bugs:
+
+1. **`.status.terminatingReplicas` schema mismatch.** k3s v1.35 emits a
+   `Deployment.status.terminatingReplicas` field that Argo CD v2.11.7's
+   embedded OpenAPI schema does not know, so structured-merge diff fails
+   with `ComparisonError: field not declared in schema`. Argo sync itself
+   still works (server-side apply reconciles fine), and selfHeal fires as
+   soon as a fresh diff succeeds — but the app can flap between
+   `Synced` and `Unknown` until Argo CD is upgraded to a build with the
+   updated schema (>= v2.12). Upgrading Argo CD is the clean fix.
+
+2. **Staging / prod app pods CrashLoop.** The `expense-api` container in
+   `overlays/{staging,prod}` starts and then fails Hibernate init with
+   `Unable to determine Dialect without JDBC metadata` — the ConfigMap in
+   those overlays does not point at a reachable Postgres. This is an app
+   configuration gap unrelated to GitOps; Argo correctly reports the
+   Applications as `Synced` (git desired state applied) and `Degraded`
+   (workload not Healthy), which is precisely the signal the pipeline
+   should surface. Fix belongs in the config repo overlays, not here.
+
+3. **Live targetRevision is `w6d2-implementation` for local verification.**
+   The committed YAML in the config repo (both `Application` and
+   `ApplicationSet`) points at `main`, per the reconcile-loop design. For
+   this pre-merge verification only, the live cluster resources were
+   patched to `targetRevision: w6d2-implementation` so Argo could read the
+   not-yet-merged manifests. The git-tracked value stays `main`; a
+   post-merge re-sync will pick up `main` automatically.
 
 ## Out of scope for W6D2
 
@@ -209,7 +254,23 @@ diff /tmp/pods.before /tmp/pods.after   # expected: no diff
 kubectl apply -f argocd/applicationsets/expense-api-envs.yaml -n argocd
 ```
 
-<!-- preserve-resources-experiment: PENDING (attach diff output after run) -->
+<!-- preserve-resources-experiment: CAPTURED 2026-07-11 on k3d-expense.
+Procedure:
+  kubectl -n argocd get applications -o name | sort > /tmp/apps.before
+  kubectl -n expense-{dev,staging,prod} get deploy expense-api -o name > /tmp/deps.<env>.before
+  kubectl -n argocd delete applicationset expense-api-envs --wait=true
+  # (Argo garbage-collected the 3 child Applications, expected — the guarantee
+  # is on managed workloads, not on the child Application objects.)
+  kubectl -n expense-{dev,staging,prod} get deploy expense-api -o name
+Result:
+  applicationset.argoproj.io "expense-api-envs" deleted
+  APPS diff: expense-api-{dev,staging,prod} removed (Applications were deleted)
+  DEV/STG/PROD deploy diff: EMPTY — deployment.apps/expense-api still present
+    in all three namespaces after AppSet delete. preserveResourcesOnDeletion
+    prevented cascade delete of the actual workloads.
+Restore: kubectl apply -f argocd/applicationsets/expense-api-envs.yaml
+  (child Applications regenerated; sync status returns to Synced.)
+-->
 
 ## Slack notification wiring
 
