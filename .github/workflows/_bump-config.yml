@@ -1,0 +1,157 @@
+name: bump-config (reusable)
+
+# Opens a PR against the sibling GitOps config repo bumping the dev overlay's
+# image tag to a freshly-pushed SHA. This workflow is the single seam between
+# the app repo's build pipeline and the GitOps repo. It NEVER talks to a
+# cluster: no kubectl, no kubeconfig, no aws eks update-kubeconfig. Cluster
+# state is reconciled by Argo CD from the GitOps repo, out of band from CI.
+
+on:
+  workflow_call:
+    inputs:
+      image-name:
+        description: Container image name to bump (e.g. uptimecrew/expense-api).
+        required: true
+        type: string
+      image-sha:
+        description: 40-character git SHA that was pushed to the registry.
+        required: true
+        type: string
+      gitops-repository:
+        description: owner/name of the sibling GitOps config repo.
+        required: true
+        type: string
+      overlay-path:
+        description: Path (inside the config repo) of the overlay to bump.
+        required: false
+        type: string
+        default: overlays/dev
+      gitops-base-branch:
+        description: Base branch on the config repo (PR target).
+        required: false
+        type: string
+        default: main
+
+permissions:
+  contents: read
+
+jobs:
+  bump:
+    name: Bump ${{ inputs.overlay-path }} image tag
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    # No id-token here on purpose: this job talks to GitHub only, not AWS.
+    permissions:
+      contents: read
+    steps:
+      - name: Assert 40-hex image SHA
+        env:
+          IMAGE_SHA: ${{ inputs.image-sha }}
+        run: |
+          set -euo pipefail
+          if ! printf '%s' "${IMAGE_SHA}" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error::image-sha must be exactly 40 lowercase hex characters. got: ${IMAGE_SHA}" >&2
+            exit 1
+          fi
+
+      - name: Assert gitops-repository shape
+        env:
+          GITOPS_REPO: ${{ inputs.gitops-repository }}
+        run: |
+          set -euo pipefail
+          if ! printf '%s' "${GITOPS_REPO}" | grep -Eq '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$'; then
+            echo "::error::gitops-repository must be owner/name. got: ${GITOPS_REPO}" >&2
+            exit 1
+          fi
+
+      - name: Checkout config repo
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: ${{ inputs.gitops-repository }}
+          ref: ${{ inputs.gitops-base-branch }}
+          # GITOPS_REPO_TOKEN must be a fine-grained PAT (or GitHub App
+          # installation token) scoped ONLY to `contents: write` and
+          # `pull-requests: write` on the config repo. It is not
+          # cluster-scoped and cannot mutate AWS or Kubernetes state.
+          token: ${{ secrets.GITOPS_REPO_TOKEN }}
+          persist-credentials: true
+          path: gitops
+
+      - name: Install kustomize v5.4.3
+        run: |
+          set -euo pipefail
+          curl -sSL -o /tmp/kustomize.tar.gz \
+            https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv5.4.3/kustomize_v5.4.3_linux_amd64.tar.gz
+          tar -xzf /tmp/kustomize.tar.gz -C /usr/local/bin kustomize
+          kustomize version
+
+      - name: kustomize edit set image
+        working-directory: gitops/${{ inputs.overlay-path }}
+        env:
+          IMAGE_NAME: ${{ inputs.image-name }}
+          IMAGE_SHA: ${{ inputs.image-sha }}
+        run: |
+          set -euo pipefail
+          kustomize edit set image "${IMAGE_NAME}=${IMAGE_NAME}:${IMAGE_SHA}"
+          echo "--- kustomization.yaml after edit ---"
+          cat kustomization.yaml
+
+      - name: Detect diff
+        id: diff
+        working-directory: gitops
+        run: |
+          set -euo pipefail
+          if git diff --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::no overlay change — kustomize set image was a no-op (tag already at ${IMAGE_SHA})"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          IMAGE_SHA: ${{ inputs.image-sha }}
+
+      - name: Configure git identity
+        if: steps.diff.outputs.changed == 'true'
+        working-directory: gitops
+        run: |
+          git config user.name  "expense-api-ci[bot]"
+          git config user.email "expense-api-ci@users.noreply.github.com"
+
+      - name: Create branch, commit, push
+        if: steps.diff.outputs.changed == 'true'
+        working-directory: gitops
+        env:
+          IMAGE_NAME: ${{ inputs.image-name }}
+          IMAGE_SHA: ${{ inputs.image-sha }}
+          OVERLAY_PATH: ${{ inputs.overlay-path }}
+        run: |
+          set -euo pipefail
+          BRANCH="bump/${OVERLAY_PATH//\//-}-${IMAGE_SHA:0:12}"
+          echo "BRANCH=${BRANCH}" >> "$GITHUB_ENV"
+          git checkout -b "${BRANCH}"
+          git add "${OVERLAY_PATH}/kustomization.yaml"
+          git commit -m "chore(${OVERLAY_PATH}): bump ${IMAGE_NAME} to ${IMAGE_SHA}"
+          git push --set-upstream origin "${BRANCH}"
+
+      - name: Open pull request
+        if: steps.diff.outputs.changed == 'true'
+        working-directory: gitops
+        env:
+          # gh auth via env token, scoped by GITOPS_REPO_TOKEN's own limits.
+          GH_TOKEN: ${{ secrets.GITOPS_REPO_TOKEN }}
+          IMAGE_NAME: ${{ inputs.image-name }}
+          IMAGE_SHA: ${{ inputs.image-sha }}
+          OVERLAY_PATH: ${{ inputs.overlay-path }}
+          BASE: ${{ inputs.gitops-base-branch }}
+          SOURCE_REPO: ${{ github.repository }}
+          SOURCE_RUN: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC2016  # printf format literal; %s substitutions come from printf, not the shell
+          BODY=$(printf 'Auto-generated by [%s] run %s.\n\nBumps `%s` in `%s/kustomization.yaml` to `%s`.\n\nArgo CD will reconcile the target namespace once this PR merges into `%s`.\n' \
+                       "${SOURCE_REPO}" "${SOURCE_RUN}" "${IMAGE_NAME}" "${OVERLAY_PATH}" "${IMAGE_SHA}" "${BASE}")
+          gh pr create \
+            --base  "${BASE}" \
+            --head  "${BRANCH}" \
+            --title "chore(${OVERLAY_PATH}): bump ${IMAGE_NAME} to ${IMAGE_SHA:0:12}" \
+            --body  "${BODY}"

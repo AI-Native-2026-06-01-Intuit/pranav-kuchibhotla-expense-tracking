@@ -59,3 +59,19 @@ jobs:
     with:
       image-tag: ${{ github.sha }}
       also-tag-main: true
+
+  bump-gitops-dev:
+    name: Bump GitOps dev overlay
+    needs: call-build-and-push
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/_bump-config.yml
+    permissions:
+      contents: read
+    with:
+      image-name: uptimecrew/expense-api
+      image-sha: ${{ github.sha }}
+      # Sibling GitOps repo. Cluster state for expense-api lives here; see
+      # expense-api/GITOPS.md for the reconcile flow.
+      gitops-repository: AI-Native-2026-06-01-Intuit/pranav-kuchibhotla-expense-config
+      overlay-path: overlays/dev
+    secrets: inherit
