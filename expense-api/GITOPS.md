@@ -289,44 +289,89 @@ Notifications go through a Slack Incoming Webhook. The URL lives at key
 `slack-webhook-url` in `argocd-notifications-secret` (namespace `argocd`),
 never in git. The ConfigMap declares:
 
-- `service.webhook.slack-incoming` — the outbound service
+- `service.webhook` — the outbound webhook service (see CM shape note in
+  `argocd-system/notifications-cm.yaml`; the bare key form is required by
+  the v2.11 / v2.12 notifications-controller because named-webhook keys
+  of the form `service.webhook.<name>` are silently dropped by that
+  parser)
 - `trigger.on-sync-failed` and `trigger.on-health-degraded` (nil-guarded)
 - `template.app-sync-failed` and `template.app-health-degraded` — plain
   `{"text": "..."}` payloads (Slack Incoming Webhook shape)
-- One subscription: `webhook:slack-incoming` for apps labeled `team=expense`
+- One subscription: `webhook:webhook` for apps labeled `team=expense`
 
-**Round-trip evidence.** A direct POST from inside the k3d-expense
-cluster to the Slack webhook returned HTTP 200 (verified 2026-07-11):
+### Controller → Slack round-trip evidence
+
+Captured 2026-07-13 on k3d-expense with argocd-notifications-controller
+image `quay.io/argoproj/argocd:v2.12.11` (upgraded from v2.11.7; the
+main argocd-server, application-controller, repo-server, dex, and
+applicationset-controller remain on v2.11.7 — only the notifications
+image was bumped because its embedded notifications-engine build in
+v2.11.7 does not register the webhook service under any config shape we
+tried).
+
+Procedure:
 
 ```
-$ kubectl -n argocd run curl-test --image=curlimages/curl:8.9.1 --restart=Never \
-    --rm -i -- curl -sS -o /dev/null -w '%{http_code}\n' \
-    -X POST -H 'Content-Type: application/json' \
-    --data '{"text":":white_check_mark: W6D2 notification-plumbing test..."}' \
-    "<SECRET_WEBHOOK_URL>"
-200
+# 1. Restart the controller so it re-reads the corrected CM.
+kubectl -n argocd rollout restart deploy/argocd-notifications-controller
+kubectl -n argocd rollout status  deploy/argocd-notifications-controller
+
+# 2. Force a sync failure on expense-api-dev by targeting a non-existent
+#    revision. Auto-sync is briefly disabled on that app so the failure
+#    persists long enough for the trigger to fire.
+kubectl -n argocd patch application expense-api-dev --type json \
+  -p '[{"op":"remove","path":"/spec/syncPolicy/automated"}]'
+kubectl -n argocd patch application expense-api-dev --type merge \
+  -p '{"operation":{"sync":{"revision":"refs/heads/does-not-exist"}}}'
+
+# 3. Watch for the controller's outbound POST + Slack response.
+kubectl -n argocd logs deploy/argocd-notifications-controller \
+  | grep -E 'Sending request: POST|Received response: HTTP/2.0 200|service=webhook'
+
+# 4. Restore the app.
+kubectl -n argocd patch application expense-api-dev --type merge \
+  -p '{"spec":{"syncPolicy":{"automated":{"prune":true,"selfHeal":true}}}}'
+kubectl -n argocd patch application expense-api-dev --type merge \
+  -p '{"operation":{"sync":{"revision":"w6d2-implementation"}}}'
 ```
 
-The message appeared in the target Slack channel — screenshot captured
-separately (webhook URL not shown in the screenshot).
+Observed log (secret webhook URL and Slack response headers elided):
 
-**Argo-controller path is present but not yet firing.** The
-notifications-controller in the v2.11.7 install responds "notification
-service 'webhook' is not supported" for the CM-declared
-`service.webhook.slack-incoming`. The engine's webhook service ships in
-`notifications-engine v0.4.1` (which v2.11.7 depends on), but the
-argocd-notifications-controller wiring in v2.11.7 does not register the
-webhook service by default. Options tracked:
+```
+21:19:30Z debug msg="Sending request: POST /services/T******/B******/l****** HTTP/1.1
+Host: hooks.slack.com
+Content-Type: application/json
 
-1. Upgrade to Argo CD v2.12+ (webhook is registered by default there).
-2. Switch to the built-in `slack` service with a proper Slack bot token
-   (xoxb-...) once a Slack App is provisioned.
-3. Deploy a tiny in-cluster "webhook shim" that Argo's `slack` service
-   posts to and which forwards to the Incoming Webhook.
+{
+  "text": ":x: *Argo CD:* application `expense-api-dev` sync FAILED.
+*Project:* expense
+*Env:* dev
+*Path:* overlays/dev
+*Revision:* af8ca06a902c3e4c644980c51ef7875d5452b77e
+*Phase:* Error
+*Reason:* ComparisonError: Failed to load target state: ... Unable to
+ resolve 'refs/heads/does-not-exist' to a commit SHA"
+}" service=webhook
 
-Option 1 is preferred and is a v6d3 follow-up. The wiring in the config
-repo is already in the correct shape for Option 1 — no ConfigMap changes
-needed when Argo is upgraded.
+21:19:30Z debug msg="Received response: HTTP/2.0 200 OK
+Content-Length: 2
+...
+ok" service=webhook
+
+21:19:30Z info msg="Notification sent to '{webhook webhook}'"
+   resource=argocd/expense-api-dev
+```
+
+The message rendered in the target Slack channel (screenshot captured
+separately; webhook URL not shown).
+
+### Earlier direct-webhook-POST sanity check
+
+Before the controller path was working, a direct POST from an in-cluster
+curl Pod to the same webhook URL returned HTTP 200 — that proved the
+URL and network path, but the reviewer correctly flagged that a direct
+call does not exercise the notifications-controller wiring. The
+controller-driven POST above supersedes that evidence.
 
 ## Secrets outside git
 
