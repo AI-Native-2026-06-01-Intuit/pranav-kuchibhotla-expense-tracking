@@ -1,4 +1,4 @@
-# expense-api CI/CD pipeline (W6D1)
+# expense-api CI/CD pipeline (W6D1, updated W6D2)
 
 This document describes the GitHub Actions pipeline that builds, scans, publishes,
 and deploys the `expense-api` service, together with the AWS OIDC federation that
@@ -25,6 +25,14 @@ makes AWS access possible without long-lived credentials.
   `if: github.event_name == 'push' && github.ref == 'refs/heads/main'`) and
   invokes the reusable `_build-and-push.yml` workflow. Pull requests never
   push images.
+- `bump-gitops-dev` job (W6D2) runs after a successful `call-build-and-push`
+  on push-to-main and invokes the reusable `_bump-config.yml` workflow.
+  It opens a PR against the sibling GitOps config repo
+  (`AI-Native-2026-06-01-Intuit/pranav-kuchibhotla-expense-config`)
+  bumping the `overlays/dev` image tag to `github.sha`. That PR is the
+  hand-off from CI to Argo CD; merging it triggers Argo's reconcile into
+  namespace `expense-dev`. The app repo pipeline does not talk to a
+  cluster at any point — see `expense-api/GITOPS.md` for the full flow.
 
 **Unit vs integration tests.** `./gradlew build` runs unit tests only
 (`*Test.java`); `*IT.java` classes are excluded from the `test` task and run
@@ -81,6 +89,41 @@ The GitHub Actions build role is **not** granted `ecr:BatchDeleteImage` or
 any other delete permission. CI never deletes or recreates the `main` tag —
 it relies on the exclusion filter to permit re-tagging in place.
 
+### `.github/workflows/_bump-config.yml` (W6D2)
+
+Reusable workflow triggered via `workflow_call`. Typed inputs:
+
+| Input                 | Required | Default        | Purpose                                                                          |
+| --------------------- | -------- | -------------- | -------------------------------------------------------------------------------- |
+| `image-name`          | yes      |                | Container image name to pin (e.g. `uptimecrew/expense-api`).                     |
+| `image-sha`           | yes      |                | 40-hex git SHA. Validated by regex before any external call.                     |
+| `gitops-repository`   | yes      |                | `owner/name` of the sibling config repo. Validated by regex.                     |
+| `overlay-path`        | no       | `overlays/dev` | Path (inside the config repo) whose `kustomization.yaml` gets `set image`.       |
+| `gitops-base-branch`  | no       | `main`         | PR target on the config repo.                                                    |
+
+Steps:
+
+1. Validate inputs (SHA regex, `owner/name` regex).
+2. `actions/checkout` the config repo using `secrets.GITOPS_REPO_TOKEN`.
+3. Install pinned `kustomize v5.4.3`.
+4. `kustomize edit set image "${IMAGE_NAME}=${IMAGE_NAME}:${IMAGE_SHA}"`.
+5. Detect diff; skip PR if no change.
+6. Create a branch `bump/<overlay-path>-<sha12>`, commit, push.
+7. `gh pr create` against the config repo's base branch.
+
+**Auth:** the workflow needs `GITOPS_REPO_TOKEN` in the app repo's secrets.
+It must be a fine-grained PAT (or GitHub App installation token) scoped to
+the config repo only, with `Contents: read/write` + `Pull requests:
+read/write` — nothing else. It is **not** cluster- or AWS-scoped and cannot
+mutate infrastructure state. If the token is missing, the checkout step
+fails with a clear error and no cross-repo mutation is possible.
+
+**No cluster access.** This workflow does not use `kubectl`, does not
+reference `kubeconfig` or `EKS_KUBECONFIG`, and does not call
+`aws eks update-kubeconfig`. The app repo pipeline's contract with the
+cluster is: push an image, open a PR against the config repo. Argo CD
+does the rest.
+
 ### `.github/workflows/deploy-prod.yml`
 
 - `workflow_dispatch` only — no automatic prod deploy.
@@ -92,6 +135,14 @@ it relies on the exclusion filter to permit re-tagging in place.
   the image is missing the workflow fails before any deploy step runs.
 - Concurrency group `expense-api-deploy-prod` with `cancel-in-progress: false`,
   so overlapping prod deploys queue rather than cancel each other.
+
+**W6D2 note.** With the GitOps cutover in place, environment promotion
+(dev → staging → prod) is done by PRs against the sibling config repo's
+`overlays/staging` and `overlays/prod` `kustomization.yaml`. `deploy-prod.yml`
+remains as an ECR-existence guard — it verifies that the SHA a promoter is
+about to reference in the prod overlay actually exists in the registry
+before that PR is opened. Actual cluster reconciliation into
+`expense-prod` is Argo CD's job; see `expense-api/GITOPS.md`.
 
 ### `.github/actions/setup-build/action.yml`
 
