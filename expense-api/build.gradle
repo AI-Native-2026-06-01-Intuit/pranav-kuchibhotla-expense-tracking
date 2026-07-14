@@ -75,6 +75,13 @@ dependencies {
     testImplementation 'org.awaitility:awaitility:4.2.2'
     testImplementation 'org.springframework.graphql:spring-graphql-test'
     testImplementation 'io.opentelemetry:opentelemetry-sdk-testing'
+    // Flyway is test-only for now: the pgvector merchant_embeddings IT
+    // (W6D4) applies V4__create_merchant_embeddings.sql to a pgvector
+    // Testcontainer, and we deliberately do not enable production
+    // Flyway auto-config until we have a full migration story
+    // covering the pre-existing V1/V2 root-level SQL files.
+    testImplementation 'org.flywaydb:flyway-core:10.20.1'
+    testImplementation 'org.flywaydb:flyway-database-postgresql:10.20.1'
 }
 
 dependencyManagement {
@@ -104,7 +111,27 @@ tasks.register('integrationTest', Test) {
         events 'passed', 'skipped', 'failed'
         showStandardStreams = true
     }
+    // Wire the task to the same source set as `test`. Registering a
+    // fresh Test task in Gradle 9.x leaves testClassesDirs / classpath
+    // unset by default, which makes the task report NO-SOURCE
+    // regardless of includes.
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath
     include '**/*IT.class'
+    // Rancher Desktop on macOS exposes its Docker socket at
+    // ~/.rd/docker.sock. The Gradle daemon strips DOCKER_HOST from the
+    // parent shell's env, so pass the discovery info as JVM system
+    // properties to the test worker and (redundantly) as env vars.
+    // docker-java's default socket path (/var/run/docker.sock) is
+    // absent on Rancher setups.
+    if (System.getProperty('os.name').toLowerCase().contains('mac')) {
+        def rdSocket = "${System.getProperty('user.home')}/.rd/docker.sock"
+        if (file(rdSocket).exists()) {
+            systemProperty 'docker.host', "unix://${rdSocket}"
+            environment 'DOCKER_HOST', "unix://${rdSocket}"
+            environment 'TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE', rdSocket
+        }
+    }
     shouldRunAfter test
 }
 
