@@ -16,6 +16,14 @@ Root package: `com.uptimecrew.expense`
   [`expense-api/COST.md`](expense-api/COST.md) for the runbook and the
   cohort override that swaps Bedrock for the provided `LLM_API_KEY`.
 
+**W6D5:** SRE capstone (observability, cost management, auto-scaling).
+See [`expense-api/SRE-CAPSTONE.md`](expense-api/SRE-CAPSTONE.md) for the
+full write-up, [`expense-api/loadtests/expense-api-p99.js`](expense-api/loadtests/expense-api-p99.js)
+for the k6 SLO gate (p99<600ms, error<1%, cost p95<$0.004), and
+[`expense-api/docs/evidence/w6d5-platform-gaps.md`](expense-api/docs/evidence/w6d5-platform-gaps.md)
+for the platform omissions (no shared EKS cluster was provided, so
+k8s/observability manifests in the config repo are static/local only).
+
 ## Domain types
 
 - `Transaction` — a single expense entry (amount, date, merchant, kind, category)
