@@ -24,6 +24,11 @@ for the k6 SLO gate (p99<600ms, error<1%, cost p95<$0.004), and
 for the platform omissions (no shared EKS cluster was provided, so
 k8s/observability manifests in the config repo are static/local only).
 
+**W7D1:** Python sidecar (`expense-ai/`) — uv + Pydantic v2 + httpx with
+a strict CI gate (ruff, ruff-format, mypy strict, pytest with
+`--cov-fail-under=85`). See [`expense-ai/PYTHON.md`](expense-ai/PYTHON.md)
+for the boundary contract and run instructions.
+
 ## Domain types
 
 - `Transaction` — a single expense entry (amount, date, merchant, kind, category)
