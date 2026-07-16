@@ -1,0 +1,8 @@
+{
+  "id": "merchant-001",
+  "tenantId": "tenant-synth",
+  "name": "Acme Office Supplies",
+  "category": "office_supplies",
+  "amount": "123.45",
+  "createdAt": "2026-01-15T12:00:00Z"
+}
