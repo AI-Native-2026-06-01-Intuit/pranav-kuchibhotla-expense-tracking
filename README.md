@@ -10,6 +10,11 @@ Root package: `com.uptimecrew.expense`
 
 - `com.uptimecrew.expense.model` — domain entities and value objects
 - `com.uptimecrew.expense.service` — domain services and classifiers
+- `com.uptimecrew.expense.llmproxy.cost` — W6D4 provider-neutral LLM
+  cost middleware (BigDecimal HALF_UP, Redis HINCRBY on integer
+  `cost_usd_e5`, EMF `acme/llmproxy CostUsd`). See
+  [`expense-api/COST.md`](expense-api/COST.md) for the runbook and the
+  cohort override that swaps Bedrock for the provided `LLM_API_KEY`.
 
 ## Domain types
 
