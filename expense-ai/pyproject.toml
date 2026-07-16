@@ -1,0 +1,70 @@
+[project]
+name = "expense-ai"
+version = "0.1.0"
+description = "Python sidecar for the UptimeCrew expense-tracking domain."
+requires-python = ">=3.12"
+readme = "PYTHON.md"
+dependencies = [
+    "pydantic>=2.7",
+    "pydantic-settings>=2.3",
+    "httpx>=0.27",
+    "tenacity>=8.3",
+]
+
+[project.scripts]
+expense-ai = "expense_ai.cli:entrypoint"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.2",
+    "pytest-asyncio>=0.23",
+    "pytest-cov>=5.0",
+    "mypy>=1.10",
+    "ruff>=0.5",
+    "respx>=0.21",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/expense_ai"]
+
+[tool.mypy]
+strict = true
+python_version = "3.12"
+disallow_any_explicit = true
+warn_return_any = true
+warn_unused_ignores = true
+files = ["src", "tests"]
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = ["respx", "respx.*"]
+ignore_missing_imports = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "UP", "B", "SIM", "I", "RUF", "T20"]
+
+[tool.ruff.lint.per-file-ignores]
+"src/expense_ai/cli.py" = ["T20"]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+addopts = "-ra --strict-markers --strict-config"
+testpaths = ["tests"]
+xfail_strict = true
+asyncio_mode = "strict"
+
+[tool.coverage.run]
+branch = true
+source = ["src/expense_ai"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
