@@ -21,11 +21,11 @@ import { Trend, Counter } from "k6/metrics";
 export const options = {
   thresholds: {
     // p99 latency < 600 ms
-    http_req_duration: ["p(99)<600"],
+    http_req_duration: ['p(99)<600'],
     // error rate < 1%
-    http_req_failed: ["rate<0.01"],
+    http_req_failed: ['rate<0.01'],
     // p95 cost per request < $0.004
-    cost_per_request_usd: ["p(95)<0.004"],
+    cost_per_request_usd: ['p(95)<0.004'],
   },
   scenarios: {
     steady: {

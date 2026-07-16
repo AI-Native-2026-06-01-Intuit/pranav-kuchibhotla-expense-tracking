@@ -69,15 +69,17 @@ Result: **PASS** (parses as 1 YAML doc).
 
 ### SLO thresholds copied verbatim
 
+Single-quoted (k6 idiomatic) so the CI `grep -F "'p(99)<600'"` step matches:
+
 ```
-$ grep -n "p(99)<600" expense-api/loadtests/expense-api-p99.js
-24:    http_req_duration: ["p(99)<600"],
+$ grep -F "'p(99)<600'" expense-api/loadtests/expense-api-p99.js
+    http_req_duration: ['p(99)<600'],
 
-$ grep -n "rate<0.01" expense-api/loadtests/expense-api-p99.js
-26:    http_req_failed: ["rate<0.01"],
+$ grep -F "'rate<0.01'" expense-api/loadtests/expense-api-p99.js
+    http_req_failed: ['rate<0.01'],
 
-$ grep -n "p(95)<0.004" expense-api/loadtests/expense-api-p99.js
-28:    cost_per_request_usd: ["p(95)<0.004"],
+$ grep -F "'p(95)<0.004'" expense-api/loadtests/expense-api-p99.js
+    cost_per_request_usd: ['p(95)<0.004'],
 ```
 
 ### Synthetic tenant only
