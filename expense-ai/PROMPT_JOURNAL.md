@@ -392,3 +392,153 @@ Rejected / rewritten during initial authoring:
 - Suggestion to retry 4xx "just in case". Rejected — client errors will
   not become non-client on retry; retrying wastes quota. The predicate is
   explicit about this and there is a unit test asserting no-retry on 400.
+
+---
+
+# W7D2 — data tooling and RAG plumbing
+
+## Honest framing
+
+W7D2 was driven by one long Claude Code prompt (the same shape as W7D1):
+a numbered phase-by-phase brief that generated every new module in a
+single pass, then converged on green via the local quality gate. This
+section reproduces the three most substantive sub-prompts and the
+compressed reply summary. Full source lives in
+[`src/expense_ai/corpus.py`](src/expense_ai/corpus.py),
+[`src/expense_ai/pgvector_loader.py`](src/expense_ai/pgvector_loader.py),
+[`src/expense_ai/rag.py`](src/expense_ai/rag.py), and
+[`tests/test_great_expectations_suite.py`](tests/test_great_expectations_suite.py);
+excerpts below are the essence, not verbatim exchanges I paraphrased.
+
+Nothing sensitive appeared in prompt or reply — the LangSmith and
+Anthropic keys are `replace-me` in `.env.example` and never resolved to
+real values in this repo.
+
+## Exchange 1 — corpus loader
+
+### Prompt (verbatim, W7D2 Phase 2)
+
+> Create `expense-ai/src/expense_ai/corpus.py`.
+>
+> Requirements:
+> - constants: `MODEL_NAME = "all-MiniLM-L6-v2"`, `EMBEDDING_DIM = 384`.
+> - `CorpusRow` `@dataclass(frozen=True, slots=True)` with fields:
+>   `doc_id: str`, `chunk_idx: int`, `chunk_text: str`,
+>   `embedding: NDArray[np.float32]`, `model_version: str`,
+>   `tenant_id: str`.
+> - `load_corpus(path)` supports `.jsonl`, `.json`, `.parquet`; raises
+>   `ValueError` for unsupported extension or missing required columns;
+>   dedups on `(doc_id, chunk_idx)`; filters `chunk_text` length
+>   `1..8000`.
+> - `embed_dataframe(df, model=None, batch_size=64)` calls
+>   `model.encode(...)` once, casts via
+>   `np.asarray(..., dtype=np.float32)`, validates matrix shape
+>   `(len(df), 384)`, each row `(384,)`, no `float64`, no per-row
+>   `encode()`.
+> - Must pass `mypy --strict` with `disallow_any_explicit = true`.
+
+### Reply summary (accepted / rewritten)
+
+- **Accepted first-draft**: the dispatch on `path.suffix`, `drop_duplicates(subset=["doc_id","chunk_idx"], keep="first")`,
+  `reset_index(drop=True)` at the end, and the `Protocol` structural
+  type for the encoder (so tests inject a fake without depending on
+  `SentenceTransformer` at type-check time).
+- **Rewritten**: initial draft returned `np.float64` because
+  `np.linalg.norm` promoted the array. Added an explicit
+  `.astype(np.float32, copy=False)` at the row boundary and asserted
+  `emb.dtype == np.float32` per row so a regression here can't sneak
+  past.
+- Used / Modified / Rejected: **Used** — module structure, dedup and
+  length-filter logic. **Modified** — added per-row dtype/shape assertion
+  after seeing float64 slip through. **Rejected** — a `@cache` on the
+  SentenceTransformer loader (would deadlock in test workers).
+
+## Exchange 2 — pgvector schema + loader
+
+### Prompt (verbatim, W7D2 Phase 3)
+
+> Create `expense-ai/sql/V001__doc_chunks.sql`:
+> - `CREATE EXTENSION IF NOT EXISTS vector;`
+> - table `doc_chunks(chunk_id BIGSERIAL PK, doc_id TEXT, chunk_idx INT,
+>   chunk_text TEXT, embedding vector(384), model_version TEXT,
+>   tenant_id TEXT, created_at TIMESTAMPTZ default now(),
+>   UNIQUE (doc_id, chunk_idx, model_version))`.
+> - indexes: `doc_chunks_doc_id_idx` on `doc_id`,
+>   `doc_chunks_tenant_model_idx` on `(tenant_id, model_version)`,
+>   `doc_chunks_embedding_hnsw` `USING hnsw (embedding vector_cosine_ops)
+>   WITH (m = 16, ef_construction = 64)`.
+>
+> Then `expense-ai/src/expense_ai/pgvector_loader.py` with
+> `load_rows(dsn, rows)` that calls `register_vector`, uses
+> `cursor.executemany`, and upserts with
+> `ON CONFLICT (doc_id, chunk_idx, model_version) DO UPDATE`.
+
+### Reply summary (accepted / rewritten)
+
+- **Accepted first-draft**: SQL exactly as prompted, single `psycopg.connect`
+  context, empty-payload short-circuit, single `commit`.
+- **Rewritten**: draft omitted `register_vector(conn)`; inserts still
+  "worked" locally because psycopg silently bound the numpy arrays as
+  bytes, but `<=>` distance queries returned garbage. Added
+  `register_vector` and a Testcontainers integration test that runs
+  `EXPLAIN ... ORDER BY embedding <=> %s` and asserts the plan uses
+  `doc_chunks_embedding_hnsw` (with `SET enable_seqscan = off; ANALYZE`
+  first, so a small table doesn't default to seq scan).
+- Used / Modified / Rejected: **Used** — DDL + upsert SQL verbatim.
+  **Modified** — inserted `register_vector` + added HNSW plan assertion.
+  **Rejected** — a `try/except: pass` around the ANN EXPLAIN (would hide
+  index-not-used bugs).
+
+## Exchange 3 — Great Expectations suite
+
+### Prompt (verbatim, W7D2 Phase 6)
+
+> Create `expense-ai/tests/test_great_expectations_suite.py`. Spin up a
+> Testcontainers `pgvector/pgvector:pg16`, apply the schema, seed 100+
+> chunks via `load_corpus` + `embed_dataframe(fake_model)` + `load_rows`,
+> then build a GX validation with **at least 5 expectations**:
+> `doc_id` not null, `embedding` not null, `model_version` not null,
+> table row count between 100 and 10 000 000, `chunk_text` length in
+> `[1, 8000]`. Assert `result.success is True`. Mark
+> `@pytest.mark.docker`.
+
+### Reply summary (accepted / rewritten)
+
+- **Accepted first-draft**: fixture that creates the container,
+  waits for readiness, applies DDL, seeds via the real corpus loader
+  (not a hand-crafted DataFrame — this way schema drift breaks the
+  test, which is the whole point).
+- **Rewritten**: draft used the old `PandasDataset` API which does not
+  exist in GX 1.x. Reworked to the fluent API — `add_pandas` data source,
+  `add_dataframe_asset`, `add_batch_definition_whole_dataframe`, an
+  `ExpectationSuite`, and a `ValidationDefinition.run(...)`. Also
+  swapped `pd.read_sql(conn)` for a plain `cursor.fetchall()` +
+  `pd.DataFrame(...)` to avoid pandas' "SQLAlchemy connectable required"
+  warning.
+- **Rewritten**: draft used a raw `PostgresContainer(...)` with the
+  default `psycopg2` driver, which our project doesn't depend on. Set
+  `driver=None` and added an explicit `wait_for_postgres` helper that
+  polls with the real psycopg v3 driver we use in production.
+- Used / Modified / Rejected: **Used** — Testcontainers fixture shape,
+  suite of 7 expectations. **Modified** — GX 1.x fluent API, wait loop,
+  plain psycopg fetch. **Rejected** — using `great_expectations init`
+  to build a stateful project dir (ephemeral context is enough and
+  keeps tests hermetic).
+
+## What changed between the raw replies and what's committed
+
+- One `# type: ignore[union-attr]` on the RAGAS `evaluate()` return in
+  `tests/test_ragas_thresholds.py` — RAGAS types its return as
+  `EvaluationResult | Executor` and `Executor` lacks `to_pandas`. This
+  path is only reached with real Anthropic credentials, so the ignore
+  is scoped and honest.
+- A `mypy --strict` override adding `follow_imports = "skip"` for
+  `great_expectations.*` — GX ships `py.typed` but does not re-export
+  its `Expect*` classes at the type level, so the recommended
+  `from great_expectations import expectations as gxe` idiom trips
+  `attr-defined`.
+- `TESTCONTAINERS_RYUK_DISABLED=true` set at conftest import time — the
+  Ryuk reaper listens on `:8080`, which conflicts with a local k3d
+  proxy on this machine. Safe: containers still stop on context exit.
+- Coverage `omit` for the LangSmith-visibility script — the script is
+  exercised end-to-end in CI under real secrets, not by unit tests.

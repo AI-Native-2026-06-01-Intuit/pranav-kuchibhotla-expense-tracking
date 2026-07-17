@@ -89,3 +89,98 @@ Rejected / rewritten:
 - Retrying 4xx responses "just in case." Rejected — a client error will
   never become non-client on retry, so retrying wastes quota and elongates
   the failure. The retry predicate is explicit about this.
+
+## W7D2 additions — data tooling and RAG plumbing
+
+W7D2 extends the sidecar into a small RAG data pipeline. New surface:
+
+- `src/expense_ai/corpus.py` — pandas corpus loader (`load_corpus`) plus a
+  MiniLM embedding pass (`embed_dataframe`). Embeddings are strict
+  `np.float32` at 384 dimensions to match the pgvector column type.
+- `sql/V001__doc_chunks.sql` — the `doc_chunks` schema with `vector(384)`,
+  a `UNIQUE (doc_id, chunk_idx, model_version)` idempotency key, and an
+  HNSW `vector_cosine_ops` index for the `<=>` cosine operator.
+- `src/expense_ai/pgvector_loader.py` — psycopg v3 loader that calls
+  `register_vector`, uses `executemany`, and upserts with
+  `ON CONFLICT ... DO UPDATE` so re-running the loader against the same
+  corpus keeps row count stable.
+- `src/expense_ai/rag.py` — `@traceable` (`run_type="retriever"`) top-k
+  retrieval. Requires `LANGSMITH_API_KEY` unless
+  `EXPENSE_AI_ALLOW_EXTERNAL_SKIP=1`. Query is embedded once, cast to
+  `np.float32`, filtered by `tenant_id` and `model_version`, ordered by
+  `<=>`.
+- `src/expense_ai/scripts/assert_langsmith_run_visible.py` — CLI check
+  that a retrieval call surfaces as a `expense_ai.retrieve_chunks` run in
+  LangSmith. Reads all credentials from env; exits 0 with a clear
+  `SKIPPED` line when env vars are missing and skip is allowed.
+- `tests/golden/expense_golden_50.jsonl` — 55 synthetic Q/A/context rows
+  covering meals, mileage, home office, supplies, software, travel, phone,
+  internet, plus at least three labeled failure-mode rows
+  (`missing_context`, `junk_context`, `near_duplicate_context`).
+- `tests/test_ragas_thresholds.py` — always-on shape gate on the golden
+  set plus a real RAGAS `evaluate()` path that runs only when Anthropic
+  credentials exist.
+- `tests/test_great_expectations_suite.py` — 7-expectation GX suite over a
+  Testcontainers Postgres+pgvector instance seeded with the real corpus.
+
+### How to run W7D2 tests
+
+```bash
+uv sync --frozen
+uv run pytest -v tests/test_corpus.py
+uv run pytest -v tests/test_pgvector_loader.py           # Docker required
+uv run pytest -v tests/test_rag_traceable.py             # Docker required
+uv run pytest -v tests/test_ragas_thresholds.py
+uv run pytest -v tests/test_great_expectations_suite.py  # Docker required
+EXPENSE_AI_ALLOW_EXTERNAL_SKIP=1 uv run python -m expense_ai.scripts.assert_langsmith_run_visible
+```
+
+### External checks — honest skip discipline
+
+The RAGAS `evaluate()` and LangSmith visibility paths need real SaaS
+credentials. Rather than mock them (which would make the check
+misleading), they honestly skip when env vars are missing:
+
+- `test_ragas_scores_meet_thresholds` calls `pytest.skip()` if
+  `EXPENSE_AI_ANTHROPIC_API_KEY` is unset.
+- `assert_langsmith_run_visible.py` prints a `SKIPPED:` line and exits 0
+  when `LANGSMITH_API_KEY`/`EXPENSE_AI_PG_DSN` are unset **and**
+  `EXPENSE_AI_ALLOW_EXTERNAL_SKIP=1` — so CI without secrets is still
+  green but never silently green.
+
+The always-on `test_golden_set_shape` and `test_thresholds_match_assignment`
+gate the golden set contract independently of any SaaS.
+
+### AI authoring discipline — W7D2
+
+Accepted from the first draft:
+
+- The pandas corpus loader shape: `read_json`/`read_parquet` dispatch,
+  deduplication on `(doc_id, chunk_idx)`, length filtering in
+  `[1, 8000]`, `reset_index(drop=True)`.
+- Matching pgvector's HNSW `vector_cosine_ops` opclass to the `<=>`
+  cosine query operator, with `m = 16, ef_construction = 64`. This is
+  the only combination that lets the ANN index actually serve the
+  retrieval query.
+- Using `pgvector.psycopg.register_vector(conn)` before both writes
+  (loader) and reads (retrieval).
+
+Rejected or corrected:
+
+- Initial embeddings came back as `np.float64` (numpy default). Rejected —
+  pgvector's `vector` column is 4-byte floats; keeping `float64` doubles
+  memory and forces a conversion round-trip. Fixed with
+  `np.asarray(..., dtype=np.float32)` at the boundary and per-row dtype
+  assertions.
+- A first pass skipped `register_vector(conn)` because inserts "seemed to
+  work." Rejected — silent `TEXT` binding of embeddings would still
+  insert but break vector arithmetic and index use. Now called before
+  every cursor that touches the `embedding` column.
+- Inline `Client(api_key="lsv2_...")` in the LangSmith script. Rejected —
+  keys must come from env. `Client()` with no args reads
+  `LANGSMITH_API_KEY` from environment; the script never sees the raw
+  string.
+- Retrieval SQL missing the `model_version` filter. Rejected — mixing
+  results across model versions is a correctness bug (embedding spaces
+  are not comparable). Test
+  `test_model_version_filter_excludes_other_models` guards this.
