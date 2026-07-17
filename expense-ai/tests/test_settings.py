@@ -47,3 +47,24 @@ def test_settings_invalid_tenant_id_fails(monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setenv("EXPENSE_AI_TENANT_ID", "acct-1")
     with pytest.raises(ValidationError):
         ExpenseAiSettings()
+
+
+def test_settings_w7d2_optional_fields_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    _set_env(monkeypatch)
+    settings = ExpenseAiSettings()
+    assert settings.langsmith_api_key is None
+    assert settings.langsmith_project == "expense-ai-dev"
+    assert settings.pg_dsn is None
+    assert settings.anthropic_api_key is None
+
+
+def test_settings_w7d2_secrets_hide_in_repr(monkeypatch: pytest.MonkeyPatch) -> None:
+    _set_env(monkeypatch)
+    monkeypatch.setenv("EXPENSE_AI_LANGSMITH_API_KEY", "langsmith-do-not-log")
+    monkeypatch.setenv("EXPENSE_AI_ANTHROPIC_API_KEY", "anthropic-do-not-log")
+    settings = ExpenseAiSettings()
+    text = repr(settings)
+    assert "langsmith-do-not-log" not in text
+    assert "anthropic-do-not-log" not in text
+    assert settings.langsmith_api_key is not None
+    assert settings.langsmith_api_key.get_secret_value() == "langsmith-do-not-log"
