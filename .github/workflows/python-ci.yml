@@ -57,7 +57,8 @@ jobs:
         run: |
           uv run pytest -v \
             tests/test_great_expectations_suite.py \
-            tests/test_pgvector_loader.py
+            tests/test_pgvector_loader.py \
+            tests/test_pgvector_rag_rows.py
 
       - name: RAGAS golden-set thresholds
         env:
@@ -66,6 +67,33 @@ jobs:
           LANGSMITH_PROJECT: expense-ai-dev-ci
           EXPENSE_AI_ALLOW_EXTERNAL_SKIP: "1"
         run: uv run pytest -v tests/test_ragas_thresholds.py
+
+      - name: W7D3 hybrid retrieval + rerank + chunker
+        run: |
+          uv run pytest -v \
+            tests/test_chunker.py \
+            tests/test_hybrid_rrf.py \
+            tests/test_rerank.py
+
+      - name: W7D3 tenant isolation gate
+        run: uv run pytest -v tests/test_tenant_isolation.py
+
+      - name: W7D3 semantic cache smoke
+        run: uv run pytest -v tests/test_semantic_cache.py
+
+      - name: W7D3 RAGAS faithfulness gate (15-row subset)
+        env:
+          EXPENSE_AI_ANTHROPIC_API_KEY: ${{ secrets.EXPENSE_AI_ANTHROPIC_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.EXPENSE_AI_ANTHROPIC_API_KEY }}
+          LANGSMITH_API_KEY: ${{ secrets.EXPENSE_AI_LANGSMITH_API_KEY }}
+          LANGSMITH_PROJECT: expense-ai-dev-ci
+          EXPENSE_AI_ALLOW_EXTERNAL_SKIP: "1"
+        run: uv run pytest -v tests/test_ragas_gate.py -rs
+
+      - name: W7D3 Airflow DAG import
+        run: |
+          uv run python -c "from expense_ai.dags.rag_svc_ingest import expense_ai_ingest_dag; print(expense_ai_ingest_dag.dag_id)"
+          uv run pytest -v tests/test_airflow_dag_import.py
 
       - name: LangSmith run visibility
         env:
