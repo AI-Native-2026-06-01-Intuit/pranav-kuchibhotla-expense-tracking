@@ -15,6 +15,9 @@ dependencies = [
     "psycopg[binary]>=3.2",
     "pgvector>=0.3",
     "langsmith>=0.1.80",
+    "langchain-text-splitters>=0.2",
+    "langchain-core>=0.2",
+    "redis>=5.0",
 ]
 
 [project.scripts]
@@ -30,7 +33,8 @@ dev = [
     "respx>=0.21",
     "ragas>=0.1.10",
     "great-expectations>=0.18",
-    "testcontainers[postgres]>=4.7",
+    "testcontainers[postgres,redis]>=4.7",
+    "apache-airflow>=2.9",
 ]
 
 [build-system]
@@ -69,6 +73,12 @@ module = [
     "testcontainers.*",
     "datasets",
     "datasets.*",
+    "langchain_text_splitters",
+    "langchain_text_splitters.*",
+    "langchain_core",
+    "langchain_core.*",
+    "airflow",
+    "airflow.*",
 ]
 ignore_missing_imports = true
 
@@ -104,6 +114,7 @@ markers = [
     "slow: slower tests that may take multiple seconds",
     "external: tests that require external SaaS credentials (LangSmith, Anthropic)",
     "docker: tests that require Docker / Testcontainers",
+    "redis: tests that require a Redis instance (Testcontainers or local)",
 ]
 
 [tool.coverage.run]
