@@ -184,3 +184,122 @@ Rejected or corrected:
   results across model versions is a correctness bug (embedding spaces
   are not comparable). Test
   `test_model_version_filter_excludes_other_models` guards this.
+
+## W7D3 — RAG 2.0 additions
+
+W7D3 turns the W7D2 dense-only retrieval into a production-shaped hybrid
+pipeline.
+
+### New modules
+
+- `sql/V002__rag2_metadata_and_partial_indexes.sql` — `chunk_metadata`
+  jsonb, `content_hash` text, generated `chunk_tsv` tsvector, GIN
+  `jsonb_path_ops` index for `@>` containment, per-tenant partial HNSW
+  indexes (`m = 24, ef_construction = 128`) on `tenant-a/b/c`, and a
+  GIN index on `chunk_tsv`. Every index uses
+  `CREATE INDEX CONCURRENTLY IF NOT EXISTS` and is therefore applied
+  from tests via `tests/_schema.py::apply_v002` with autocommit.
+- `src/expense_ai/chunker.py` — `RecursiveCharacterTextSplitter` at
+  `chunk_size=900, overlap=150`, separators
+  `["\n\n", "\n", ". ", " ", ""]`, and stable per-doc
+  `chunk-{doc_id}-p{i}` IDs on every produced piece.
+- `src/expense_ai/pgvector_loader.py` — extended with `RagChunkRow`,
+  `content_hash_for_text`, `load_rag_rows`, and the `needs_embedding`
+  pre-embed gate. W7D2 `load_rows` and its tests remain untouched.
+- `src/expense_ai/hybrid.py` — `dense_topk_filtered` and
+  `sparse_topk_fts` (both DB-side tenant + metadata filtered),
+  rank-based `rrf_fuse` at `k_const=60`, and a `coverage` diagnostic.
+  No score normalization — RRF uses ranks only.
+- `src/expense_ai/rerank.py` — greedy MMR at `lambda=0.7`, BGE
+  cross-encoder rerank (`BAAI/bge-reranker-base`, `max_length=256`) with
+  a strict 300 ms `timeout-and-fallback` and a testable timeout counter.
+- `src/expense_ai/cache.py` — Redis semantic cache keyed on
+  `expense_ai:sem:{tenant_id}:e{epoch}:{hash}`, plus `get_epoch` /
+  `bump_epoch` and defense-in-depth citation-tenant checks on read.
+- `src/expense_ai/rag.py::retrieve_and_generate` — end-to-end entry
+  point wiring embed -> cache lookup -> dense -> hybrid FTS + RRF ->
+  MMR -> BGE rerank -> Anthropic client -> cache store. Each stage is
+  toggleable via keyword args or `RAG_USE_HYBRID/MMR/RERANK/FILTER` env.
+- `src/expense_ai/dags/rag_svc_ingest.py` — Airflow TaskFlow DAG
+  (`expense_ai_ingest`, five tasks, `max_active_runs=1`, `retries=2`,
+  `retry_delay=5m`). Importable without a scheduler or credentials.
+
+### New tests
+
+- `tests/test_chunker.py` — chunk length bounds, stability, and
+  per-doc namespacing.
+- `tests/test_pgvector_rag_rows.py` — metadata containment via `@>` and
+  the `needs_embedding` content-hash gate.
+- `tests/test_hybrid_rrf.py` — hybrid retrieval on a Testcontainers
+  pgvector DB, RRF rank accumulation, coverage bounds.
+- `tests/test_rerank.py` — MMR order at `lambda=1.0` and diversity at
+  `lambda=0.0`, BGE rerank order lift with an injected reranker, and
+  the timeout-fallback path (no real BGE download in unit tests).
+- `tests/test_semantic_cache.py` — near-duplicate cache hit, cross-tenant
+  miss, `bump_epoch` invalidation, and defense-in-depth citation check.
+- `tests/test_retrieve_and_generate.py` — cache hit skips Anthropic,
+  citations include `tenant_id`, feature flags disable stages cleanly.
+- `tests/test_tenant_isolation.py` — DB-side verification of tenant
+  scoping across dense, sparse, and metadata-filtered paths.
+- `tests/test_airflow_dag_import.py` — DAG import + retry config.
+- `tests/test_ragas_gate.py` — 15-row RAGAS subset (see amendment) with
+  a `>= 0.85` faithfulness gate and honest external skips.
+
+### How to run W7D3 tests
+
+```bash
+uv sync --frozen
+uv run pytest -v tests/test_chunker.py
+uv run pytest -v tests/test_hybrid_rrf.py
+uv run pytest -v tests/test_rerank.py
+uv run pytest -v tests/test_semantic_cache.py
+uv run pytest -v tests/test_tenant_isolation.py
+uv run pytest -v tests/test_pgvector_rag_rows.py
+uv run pytest -v tests/test_retrieve_and_generate.py
+uv run pytest -v tests/test_airflow_dag_import.py
+uv run pytest -v tests/test_ragas_gate.py -rs
+uv run python -c "from expense_ai.dags.rag_svc_ingest import expense_ai_ingest_dag; print(expense_ai_ingest_dag.dag_id)"
+```
+
+### AI authoring discipline — W7D3
+
+Accepted from the first draft:
+
+- **RRF as rank-based fusion** at `k_const=60`. Ranks — not normalized
+  scores — are the fusion signal. Two different retrievers produce
+  incomparable score distributions; averaging them is the classic
+  hybrid-retrieval trap.
+- **Per-tenant partial HNSW indexes** (`WHERE tenant_id = 'tenant-x'`)
+  paired with the `tenant_id = %s` predicate in the retrieval SQL.
+  This is what makes tenant isolation checkable at the DB layer.
+- **Timeout-and-fallback on the BGE reranker** at 300 ms. On timeout we
+  return the pre-rerank order and bump a counter; the caller can page
+  on excessive fallbacks.
+- **Tenant + epoch in the cache key** plus a re-check of every cached
+  citation's `tenant_id`. Defense in depth: a mis-scoped write cannot
+  leak into another tenant's read path.
+
+Rejected or corrected:
+
+- A `0.5 * cosine + 0.5 * ts_rank` blend for hybrid fusion. Rejected —
+  the two scales are not comparable, and this is exactly the failure
+  mode RRF avoids. `hybrid.py` contains no `normalize_score` /
+  `minmax_scale` helper; a `grep` guard in local validation enforces it.
+- BGE reranker with no timeout. Rejected — a slow reranker turns into
+  a latency incident. Now bounded by `RERANK_TIMEOUT_MS = 300`.
+- Cache key omitting `tenant_id` "because the vector already differs
+  across tenants." Rejected — the vector may not differ (near-duplicate
+  content across tenants), and any collision would leak across tenant
+  boundaries. Key includes tenant + epoch.
+- HyDE / query rewriting as part of the pipeline. Rejected — the
+  lesson explicitly excludes it today; adding it would be scope creep
+  and would confound the ablation report.
+- Fabricating RAGAS scores when the shared Anthropic workspace is
+  capped. Rejected — the report table labels cells as
+  `not executed locally` or `expected (assignment target)`; the gate
+  test raises `SystemExit` for real failures and `pytest.skip`s for
+  missing/capped credentials.
+- Using the full 50-row golden set for every RAGAS iteration. Corrected
+  after the 2026-07-20 cohort amendment — the eval now runs on a
+  15-row deterministic subset (`tests/test_ragas_gate.py::
+  _deterministic_subset`), with the 50-row shape gate preserved.

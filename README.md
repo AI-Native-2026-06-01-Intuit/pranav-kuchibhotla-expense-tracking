@@ -37,6 +37,15 @@ Postgres. Same CI gate plus Docker and (skip-safe) external-secret
 checks. See [`expense-ai/PYTHON.md`](expense-ai/PYTHON.md) for the W7D2
 run instructions and skip discipline.
 
+**W7D3:** RAG 2.0 — hybrid dense + Postgres FTS retrieval with rank-based
+RRF fusion, MMR diversification, BGE reranker with a 300 ms
+timeout-and-fallback, per-tenant partial HNSW indexes for DB-side tenant
+isolation, `chunk_metadata` JSONB with `@>` containment filtering,
+Redis semantic cache keyed by tenant + epoch, a `retrieve_and_generate`
+end-to-end entry point, an Airflow TaskFlow ingest DAG, and a 15-row
+RAGAS faithfulness gate (`>= 0.85`). Before/after report at
+[`expense-ai/docs/ragas/w7d3.md`](expense-ai/docs/ragas/w7d3.md).
+
 ## Domain types
 
 - `Transaction` — a single expense entry (amount, date, merchant, kind, category)
