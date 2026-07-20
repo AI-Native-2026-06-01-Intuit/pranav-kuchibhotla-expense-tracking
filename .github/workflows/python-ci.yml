@@ -52,3 +52,25 @@ jobs:
 
       - name: Pytest with coverage
         run: uv run pytest -v --cov=src --cov-fail-under=85
+
+      - name: Great Expectations + pgvector Testcontainers gate
+        run: |
+          uv run pytest -v \
+            tests/test_great_expectations_suite.py \
+            tests/test_pgvector_loader.py
+
+      - name: RAGAS golden-set thresholds
+        env:
+          EXPENSE_AI_ANTHROPIC_API_KEY: ${{ secrets.EXPENSE_AI_ANTHROPIC_API_KEY }}
+          LANGSMITH_API_KEY: ${{ secrets.EXPENSE_AI_LANGSMITH_API_KEY }}
+          LANGSMITH_PROJECT: expense-ai-dev-ci
+          EXPENSE_AI_ALLOW_EXTERNAL_SKIP: "1"
+        run: uv run pytest -v tests/test_ragas_thresholds.py
+
+      - name: LangSmith run visibility
+        env:
+          LANGSMITH_API_KEY: ${{ secrets.EXPENSE_AI_LANGSMITH_API_KEY }}
+          LANGSMITH_PROJECT: expense-ai-dev-ci
+          EXPENSE_AI_PG_DSN: ${{ secrets.EXPENSE_AI_PG_DSN }}
+          EXPENSE_AI_ALLOW_EXTERNAL_SKIP: "1"
+        run: uv run python -m expense_ai.scripts.assert_langsmith_run_visible

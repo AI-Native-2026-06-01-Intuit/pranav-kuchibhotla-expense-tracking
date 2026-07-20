@@ -29,6 +29,14 @@ a strict CI gate (ruff, ruff-format, mypy strict, pytest with
 `--cov-fail-under=85`). See [`expense-ai/PYTHON.md`](expense-ai/PYTHON.md)
 for the boundary contract and run instructions.
 
+**W7D2:** Data tooling for the sidecar — pandas corpus loader,
+sentence-transformers MiniLM embeddings, pgvector schema + idempotent
+loader, LangSmith-traceable retrieval, a 50-row RAGAS golden set with
+threshold gates, and a Great Expectations validation over Testcontainers
+Postgres. Same CI gate plus Docker and (skip-safe) external-secret
+checks. See [`expense-ai/PYTHON.md`](expense-ai/PYTHON.md) for the W7D2
+run instructions and skip discipline.
+
 ## Domain types
 
 - `Transaction` — a single expense entry (amount, date, merchant, kind, category)

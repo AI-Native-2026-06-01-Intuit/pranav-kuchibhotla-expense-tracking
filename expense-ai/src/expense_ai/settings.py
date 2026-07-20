@@ -33,6 +33,12 @@ class ExpenseAiSettings(BaseSettings):  # type: ignore[explicit-any]
     tenant_id: str
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
 
+    # W7D2 additions — all optional so W7D1 callers/tests keep working.
+    langsmith_api_key: SecretStr | None = None
+    langsmith_project: str = "expense-ai-dev"
+    pg_dsn: str | None = None
+    anthropic_api_key: SecretStr | None = None
+
     @field_validator("tenant_id")
     @classmethod
     def _tenant_id_prefix(cls, value: str) -> str:

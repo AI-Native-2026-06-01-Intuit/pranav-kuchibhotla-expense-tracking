@@ -9,6 +9,12 @@ dependencies = [
     "pydantic-settings>=2.3",
     "httpx>=0.27",
     "tenacity>=8.3",
+    "numpy>=2.0",
+    "pandas>=2.2",
+    "sentence-transformers>=3.0",
+    "psycopg[binary]>=3.2",
+    "pgvector>=0.3",
+    "langsmith>=0.1.80",
 ]
 
 [project.scripts]
@@ -22,6 +28,9 @@ dev = [
     "mypy>=1.10",
     "ruff>=0.5",
     "respx>=0.21",
+    "ragas>=0.1.10",
+    "great-expectations>=0.18",
+    "testcontainers[postgres]>=4.7",
 ]
 
 [build-system]
@@ -44,6 +53,36 @@ plugins = ["pydantic.mypy"]
 module = ["respx", "respx.*"]
 ignore_missing_imports = true
 
+[[tool.mypy.overrides]]
+module = [
+    "sentence_transformers",
+    "sentence_transformers.*",
+    "pandas",
+    "pandas.*",
+    "pgvector",
+    "pgvector.*",
+    "langsmith",
+    "langsmith.*",
+    "ragas",
+    "ragas.*",
+    "testcontainers",
+    "testcontainers.*",
+    "datasets",
+    "datasets.*",
+]
+ignore_missing_imports = true
+
+# great_expectations ships py.typed but does not re-export its
+# ``Expect*`` classes from the ``expectations`` namespace at the type
+# level, so strict mypy chokes on the officially recommended
+# ``from great_expectations import expectations as gxe`` idiom. Follow-
+# imports=skip keeps us honest about the modules we own while letting
+# the GX validation suite stay readable.
+[[tool.mypy.overrides]]
+module = ["great_expectations", "great_expectations.*"]
+follow_imports = "skip"
+ignore_missing_imports = true
+
 [tool.ruff]
 line-length = 100
 target-version = "py312"
@@ -53,6 +92,7 @@ select = ["E", "F", "UP", "B", "SIM", "I", "RUF", "T20"]
 
 [tool.ruff.lint.per-file-ignores]
 "src/expense_ai/cli.py" = ["T20"]
+"src/expense_ai/scripts/*" = ["T20"]
 
 [tool.pytest.ini_options]
 minversion = "8.0"
@@ -60,10 +100,19 @@ addopts = "-ra --strict-markers --strict-config"
 testpaths = ["tests"]
 xfail_strict = true
 asyncio_mode = "strict"
+markers = [
+    "slow: slower tests that may take multiple seconds",
+    "external: tests that require external SaaS credentials (LangSmith, Anthropic)",
+    "docker: tests that require Docker / Testcontainers",
+]
 
 [tool.coverage.run]
 branch = true
 source = ["src/expense_ai"]
+omit = [
+    # External-only script; covered by CI env-guarded run, not unit tests.
+    "src/expense_ai/scripts/assert_langsmith_run_visible.py",
+]
 
 [tool.coverage.report]
 show_missing = true
