@@ -542,3 +542,96 @@ real values in this repo.
   proxy on this machine. Safe: containers still stop on context exit.
 - Coverage `omit` for the LangSmith-visibility script — the script is
   exercised end-to-end in CI under real secrets, not by unit tests.
+
+## W7D3 — RAG 2.0 (2026-07-20)
+
+W7D3 was implemented in a single Claude Code session driven by one
+combined instruction (Phase 0-16 in this transcript). What follows is
+the honest AI-authoring log for the three most-substantive files.
+
+### Entry 1 — `src/expense_ai/hybrid.py`
+
+**Prompt used** (paraphrased from the combined W7D3 instruction):
+
+> Add `dense_topk_filtered`, `sparse_topk_fts`, `rrf_fuse`, and
+> `coverage` in `hybrid.py`. Dense and sparse both take a
+> `metadata_filter: Mapping[str, str] | None` and apply
+> `chunk_metadata @> %s::jsonb`. RRF uses rank position at `k_const=60`
+> — do not normalize scores. Every entry point is `@traceable`.
+
+**Reply summary — Used / Modified / Rejected**:
+
+- **Used**: shape of `HybridHit`; parameter order on
+  `dense_topk_filtered`; `register_vector(conn)` before dense queries;
+  `websearch_to_tsquery('english', %s)` + `ts_rank_cd(chunk_tsv, q)`
+  for the FTS path; the stable chunk-identity string
+  `f"{doc_id}:{chunk_idx}:{model_version}"` rather than the BIGSERIAL
+  surrogate.
+- **Modified**: added a defensive `WHERE chunk_tsv @@ ...` predicate on
+  the sparse SQL (Postgres will happily rank rows that don't match at
+  all if we omit it); pulled the metadata-filter JSON serialization
+  into `_metadata_filter_arg` to keep the two SQL builders symmetric.
+- **Rejected**: an early sketch normalized dense and sparse scores to
+  `[0, 1]` before fusion. Removed — that is the exact score-blending
+  failure mode RRF is designed to avoid. A local grep guard
+  (`grep -RIn 'normalize.*score|min[_-]max' hybrid.py`) enforces this.
+
+### Entry 2 — `src/expense_ai/rerank.py`
+
+**Prompt used**:
+
+> Add MMR at `lambda=0.7` and a BGE cross-encoder rerank with a strict
+> 300 ms timeout-and-fallback. Cache the reranker at module level so we
+> pay the load cost once. Expose a testable timeout counter. No bare
+> `except`. Reranker injectable so unit tests never download the real
+> BGE.
+
+**Reply summary — Used / Modified / Rejected**:
+
+- **Used**: the `CrossEncoderLike` structural type (matches the API we
+  actually call, not the full CrossEncoder surface); the greedy MMR
+  loop and its `lambda * sim(query, cand) - (1 - lambda) * max sim`
+  formulation.
+- **Modified**: the fallback candidate-vector path. The first draft
+  refused to run MMR without either `candidate_vecs` or a real
+  embedder, which made unit tests unwieldy. Added a deterministic
+  hash-based pseudo-vector fallback (explicitly labeled "not for
+  production") so tests can exercise MMR on synthetic hits without a
+  model download.
+- **Rejected**: a `try/except Exception:` inside `bge_rerank` that
+  swallowed everything. Rejected — the spec forbids bare `except` and
+  swallowing all exceptions hides real bugs (`argsort` misuse, wrong
+  score dtype, etc.). The timeout path is a positive check on elapsed
+  ms, not exception swallowing.
+
+### Entry 3 — `docs/ragas/w7d3.md` (before-vs-after report)
+
+**Prompt used**:
+
+> Write a before/after RAGAS report at `docs/ragas/w7d3.md` with a
+> table columned as W7D2 baseline / hybrid / rerank / MMR / filter /
+> all-on and rows for the four metrics. Be honest — do not invent
+> numbers if the external evaluator is capped.
+
+**Reply summary — Used / Modified / Rejected**:
+
+- **Used**: table shape (columns and metric rows) and the attribution
+  paragraph describing what each stage should improve.
+- **Modified**: after the 2026-07-20 cohort amendment (Slack channel:
+  "use a 15-row representative RAGAS set instead of the full 50 rows
+  ... final evidence / CI gating only"), the setup section now
+  documents the 15-row deterministic subset used by the gate. The
+  50-row shape gate stays intact.
+- **Rejected**: filling in numeric cells with a plausible-looking table.
+  The shared Anthropic workspace was reporting usage-cap errors at
+  implementation time, so cell values are labeled
+  `not executed locally` / `expected (assignment target)`. This keeps
+  the report honest and lets CI populate real numbers when the secret
+  is available.
+
+### One-line disclosure
+
+W7D3 was implemented in a single Claude Code session driven by one
+combined W7D3 prompt. All AI-authored code was reviewed and the
+rejected/modified lines above reflect what was actually changed before
+commit — not a curated success story.
