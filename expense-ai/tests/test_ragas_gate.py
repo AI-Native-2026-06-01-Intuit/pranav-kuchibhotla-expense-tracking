@@ -5,13 +5,19 @@ deterministic subset sampled from the 50-row W7D2 golden set. The 50-row
 shape gate remains untouched — this file only adds the smaller evaluation
 window used for CI gating.
 
-The external RAGAS call is skipped honestly when:
-  * Anthropic / OpenAI evaluator credentials are missing;
-  * the shared workspace usage cap is hit (surfaced as BadRequest);
-  * ``ragas`` / ``datasets`` cannot be imported.
+Skip / fail policy:
+  * In CI (``CI=true`` in the environment) the gate MUST run for real. A
+    missing Anthropic/OpenAI key or a provider workspace-cap / bad-request
+    response is a hard failure — never a silent skip.
+  * Locally, developers can opt into skipping with
+    ``EXPENSE_AI_ALLOW_EXTERNAL_SKIP=1`` when the evaluator key is missing
+    or the shared workspace is capped. Without that opt-in the local run
+    also fails, so the default developer experience matches CI.
+  * ``ragas`` / ``datasets`` import errors always skip (dependency install
+    problem, not a scoring problem).
 
 Faithfulness < 0.85 raises SystemExit to halt CI; other metrics assert at
-softer floors.
+softer floors. No score is ever synthesised.
 """
 
 from __future__ import annotations
@@ -81,14 +87,31 @@ def test_eval_subset_row_shape() -> None:
         assert not missing, f"subset row {i} missing {missing}"
 
 
+def _in_ci() -> bool:
+    """GitHub Actions and most CI runners set ``CI=true``."""
+    return os.environ.get("CI", "").lower() in {"1", "true", "yes"}
+
+
+def _allow_local_skip() -> bool:
+    return os.environ.get("EXPENSE_AI_ALLOW_EXTERNAL_SKIP", "").lower() in {"1", "true", "yes"}
+
+
 @pytest.mark.slow
 @pytest.mark.external
 def test_ragas_faithfulness_meets_gate() -> None:
     api_key = os.environ.get("EXPENSE_AI_ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
-        pytest.skip(
+        msg = (
             "EXPENSE_AI_ANTHROPIC_API_KEY / ANTHROPIC_API_KEY missing — "
-            "skipping external RAGAS eval (shape gates still active)."
+            "RAGAS faithfulness gate requires a real evaluator key."
+        )
+        if _in_ci():
+            pytest.fail(f"{msg} CI must run this gate for real (no silent skip).")
+        if _allow_local_skip():
+            pytest.skip(f"{msg} Local skip allowed via EXPENSE_AI_ALLOW_EXTERNAL_SKIP=1.")
+        pytest.fail(
+            f"{msg} Set EXPENSE_AI_ALLOW_EXTERNAL_SKIP=1 to skip locally, "
+            "or export the key to run the gate."
         )
 
     try:  # pragma: no cover - external dependency
@@ -127,7 +150,7 @@ def test_ragas_faithfulness_meets_gate() -> None:
         )
     except Exception as exc:  # pragma: no cover - external
         msg = str(exc).lower()
-        if any(
+        provider_soft_failure = any(
             fragment in msg
             for fragment in (
                 "usage cap",
@@ -138,8 +161,18 @@ def test_ragas_faithfulness_meets_gate() -> None:
                 "badrequest",
                 "openai",
             )
-        ):
-            pytest.skip(f"RAGAS evaluator unavailable ({exc}); external gate deferred to CI")
+        )
+        if provider_soft_failure:
+            if _in_ci():
+                pytest.fail(
+                    f"RAGAS evaluator returned a provider error in CI: {exc}. "
+                    "Not silently skipping — fix the credential / workspace cap."
+                )
+            if _allow_local_skip():
+                pytest.skip(
+                    f"RAGAS evaluator unavailable ({exc}); local skip allowed via "
+                    "EXPENSE_AI_ALLOW_EXTERNAL_SKIP=1."
+                )
         raise
 
     scores = result.to_pandas().mean(numeric_only=True).to_dict()  # type: ignore[union-attr]

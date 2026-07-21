@@ -87,7 +87,6 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.EXPENSE_AI_ANTHROPIC_API_KEY }}
           LANGSMITH_API_KEY: ${{ secrets.EXPENSE_AI_LANGSMITH_API_KEY }}
           LANGSMITH_PROJECT: expense-ai-dev-ci
-          EXPENSE_AI_ALLOW_EXTERNAL_SKIP: "1"
         run: uv run pytest -v tests/test_ragas_gate.py -rs
 
       - name: W7D3 Airflow DAG import
