@@ -5,15 +5,52 @@ credentials. Task bodies are minimal stubs that would call the real
 ``expense_ai`` helpers in a runtime environment; keeping them tiny at
 import time is what makes the ``uv run python -c "from ... import
 expense_ai_ingest_dag"`` check cheap and side-effect-free.
+
+The final ``bump_cache_epochs`` task actually invalidates each tenant's
+Redis semantic cache after ingest by calling
+:func:`expense_ai.cache.bump_epoch`. Redis configuration is read inside
+the task body so DAG import stays credential-free.
 """
 
 from __future__ import annotations
 
+import os
 from datetime import datetime, timedelta
 
+import redis
 from airflow.sdk import dag, task
 
+from expense_ai.cache import bump_epoch
+
 DAG_ID = "expense_ai_ingest"
+DEFAULT_TENANTS: tuple[str, ...] = ("tenant-a", "tenant-b", "tenant-c")
+
+
+def _resolve_tenants() -> list[str]:
+    override = os.environ.get("EXPENSE_AI_INGEST_TENANTS", "").strip()
+    if not override:
+        return list(DEFAULT_TENANTS)
+    return [t.strip() for t in override.split(",") if t.strip()]
+
+
+def _bump_cache_epochs_impl() -> dict[str, int]:
+    """Bump the semantic-cache epoch for every configured tenant.
+
+    Reads ``EXPENSE_AI_REDIS_URL`` and ``EXPENSE_AI_INGEST_TENANTS`` from
+    the environment at task-execution time so DAG import remains free of
+    Redis / secret dependencies.
+    """
+    redis_url = os.environ.get("EXPENSE_AI_REDIS_URL")
+    if not redis_url:
+        raise RuntimeError(
+            "EXPENSE_AI_REDIS_URL is not set; cannot invalidate semantic cache after ingest."
+        )
+    tenants = _resolve_tenants()
+    client = redis.Redis.from_url(redis_url)
+    try:
+        return {tenant: bump_epoch(client, tenant) for tenant in tenants}
+    finally:
+        client.close()
 
 
 @dag(
@@ -48,8 +85,9 @@ def expense_ai_ingest() -> None:
         return len(embedded)
 
     @task(task_id="bump_cache_epochs")
-    def bump_cache_epochs(upserted: int) -> int:
-        return upserted
+    def bump_cache_epochs(upserted: int) -> dict[str, int]:
+        del upserted  # dependency edge only; count is not needed to invalidate
+        return _bump_cache_epochs_impl()
 
     # At DAG-parse time each @task call returns an XComArg, not the annotated
     # runtime return type; the mypy noise below is unavoidable given Airflow's
