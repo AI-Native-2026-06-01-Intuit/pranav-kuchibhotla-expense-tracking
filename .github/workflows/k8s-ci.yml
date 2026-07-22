@@ -79,13 +79,19 @@ jobs:
           grep -F "uptimecrew/expense-api:${{ github.sha }}" manifests/10-expense-api.deployment.yaml
 
       - name: Seed schema ConfigMap for postgres
-        # Same trick as scripts/k8s-up.sh: build the initdb ConfigMap from the
-        # tracked V1 + V3 SQL so compose-CI and k8s-CI share the schema.
+        # Build the initdb ConfigMap from the tracked SQL. The V5 file is
+        # required — the W7D4 SyntheticOrder / SyntheticRefund entities are
+        # mapped as JPA @Entity, so Spring boots with ddl-auto: validate and
+        # will fail with "missing table [expense.synthetic_order]" if the
+        # tables are not seeded before startup. That was the actual cause of
+        # the 8m rollout timeout: all 3 replicas kept crashing in Hibernate
+        # bootstrap before readiness could ever turn green.
         run: |
           kubectl create namespace expense-dev --dry-run=client -o yaml | kubectl apply -f -
           kubectl create configmap postgres-initdb -n expense-dev \
             --from-file=10-schema.sql=db/V1__schema.sql \
             --from-file=30-event-outbox.sql=expense-api/src/main/resources/db/migration/V3__event_outbox.sql \
+            --from-file=50-orders-refunds.sql=expense-api/src/main/resources/db/migration/V5__orders_refunds.sql \
             --dry-run=client -o yaml | kubectl apply -f -
 
       - name: Seed expense-api-secrets from CI_PG_PASSWORD (or fallback)
@@ -117,22 +123,29 @@ jobs:
 
       - name: Capture k8s diagnostics on failure
         if: failure()
+        # Reviewer-mandated diagnostic set. Uses the actual label selector
+        # from the deployment (app.kubernetes.io/name=expense-api, not
+        # app=expense-api) so pod-scoped queries actually match.
         run: |
+          SEL="app.kubernetes.io/name=expense-api"
           {
-            echo "===== kubectl get all -n expense-dev -o wide ====="
-            kubectl get all -n expense-dev -o wide || true
+            echo "===== kubectl get pods -n expense-dev -o wide ====="
+            kubectl get pods -n expense-dev -o wide || true
             echo
-            echo "===== kubectl get events -n expense-dev --sort-by=.lastTimestamp ====="
-            kubectl get events -n expense-dev --sort-by=.lastTimestamp || true
+            echo "===== kubectl get deploy,rs,svc,pvc -n expense-dev ====="
+            kubectl get deploy,rs,svc,pvc -n expense-dev || true
             echo
             echo "===== kubectl describe deploy/expense-api -n expense-dev ====="
             kubectl describe deploy/expense-api -n expense-dev || true
             echo
-            echo "===== kubectl describe pods -n expense-dev ====="
-            kubectl describe pods -n expense-dev || true
+            echo "===== kubectl describe pods -n expense-dev -l $SEL ====="
+            kubectl describe pods -n expense-dev -l "$SEL" || true
             echo
-            echo "===== kubectl logs deploy/expense-api -n expense-dev --tail=300 ====="
-            kubectl logs deploy/expense-api -n expense-dev --tail=300 || true
+            echo "===== kubectl logs -n expense-dev -l $SEL --all-containers=true --tail=250 ====="
+            kubectl logs -n expense-dev -l "$SEL" --all-containers=true --tail=250 || true
+            echo
+            echo "===== kubectl get events -n expense-dev --sort-by=.lastTimestamp ====="
+            kubectl get events -n expense-dev --sort-by=.lastTimestamp || true
             echo
             echo "===== dependency logs (postgres/redis/mongo/kafka) ====="
             for d in postgres redis mongo kafka; do
