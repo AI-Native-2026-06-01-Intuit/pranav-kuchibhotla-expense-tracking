@@ -170,11 +170,13 @@ The CI Trivy gate uses `--ignorefile expense-api/.trivyignore`. Every waived
 CVE below has a scheduled review date. **New** HIGH/CRITICAL findings still
 fail the gate.
 
-- **Recorded:** 2026-07-01
+- **Recorded:** 2026-07-01 (initial waiver set); 2026-07-22 (jackson-core
+  follow-up advisory `GHSA-r7wm-3cxj-wff9` added — same remediation family
+  as the jackson-databind CVEs above)
 - **Next review:** 2026-08-01
 - **Owner:** Pranav Kuchibhotla (pranav_kuchibhotla@intuit.com)
 
-### Spring Boot BOM & transitive dependencies (31 CVEs)
+### Spring Boot BOM & transitive dependencies (32 CVEs)
 
 **Remediation:** Spring Boot `3.5.7 → 3.5.14` BOM bump (patch), plus a
 handful of individual libs (bouncycastle → `1.80.2`, lz4-java → `1.8.1`,
@@ -223,5 +225,8 @@ The fix landed after the pinned distroless nonroot digest
 - **Target:** `uptimecrew/expense-api:0.1.0`
 - **Date:** 2026-07-01
 - **Command:** `trivy image --severity HIGH,CRITICAL --ignore-unfixed --ignorefile expense-api/.trivyignore uptimecrew/expense-api:0.1.0`
-- **Result:** 0 non-waived HIGH/CRITICAL. Exit code 0. 32 unique CVEs
-  waived (see table above), all with a 2026-08-01 review deadline.
+- **Result:** 0 non-waived HIGH/CRITICAL. Exit code 0. 33 unique CVEs
+  waived (see table above), all with a 2026-08-01 review deadline. The
+  jackson-core follow-up advisory `GHSA-r7wm-3cxj-wff9` was appended on
+  2026-07-22 after Trivy's DB refresh started flagging it; remediation
+  is the same Spring Boot BOM bump that already covers the other 32.
