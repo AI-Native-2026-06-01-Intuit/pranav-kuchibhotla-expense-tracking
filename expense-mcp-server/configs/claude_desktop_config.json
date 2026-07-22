@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "expense-mcp-server": {
+      "command": "uv",
+      "args": [
+        "--directory",
+        "/ABSOLUTE/PATH/PLACEHOLDER/uptimecrew-expense/expense-mcp-server",
+        "run",
+        "expense-mcp-server"
+      ],
+      "env": {
+        "EXPENSE_MCP_ORDERS_SVC_URL": "http://localhost:8080",
+        "EXPENSE_MCP_LLM_PROXY_URL": "http://localhost:8080",
+        "EXPENSE_MCP_BEARER_JWT": "REPLACE_WITH_TEST_JWT",
+        "EXPENSE_MCP_LANGSMITH_PROJECT": "expense-mcp-server"
+      }
+    }
+  }
+}

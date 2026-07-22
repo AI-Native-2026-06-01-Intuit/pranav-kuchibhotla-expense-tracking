@@ -68,6 +68,12 @@ services:
       # and JPA schema validation only needs the tables to exist.
       - ./db/V1__schema.sql:/docker-entrypoint-initdb.d/10-schema.sql:ro
       - ./expense-api/src/main/resources/db/migration/V3__event_outbox.sql:/docker-entrypoint-initdb.d/30-event-outbox.sql:ro
+      # W7D4 synthetic orders + idempotent refunds. Mounted alongside V1 so
+      # the compose smoke stack has the tables that back the new JPA
+      # entities (SyntheticOrder / SyntheticRefund). JPA boots with
+      # ddl-auto: validate and would otherwise fail startup with
+      # "missing table [expense.synthetic_order]".
+      - ./expense-api/src/main/resources/db/migration/V5__orders_refunds.sql:/docker-entrypoint-initdb.d/50-orders-refunds.sql:ro
     secrets:
       - pg_password
     healthcheck:

@@ -1,0 +1,31 @@
+{
+  "name": "expense-mcp-server",
+  "version": "0.1.0",
+  "description": "FastMCP publisher for UptimeCrew expense: orders/refunds Spring endpoints plus the W7D3 hybrid RAG pipeline.",
+  "transports": {
+    "stdio": {
+      "command": "expense-mcp-server",
+      "args": []
+    },
+    "sse": {
+      "url": "http://127.0.0.1:8080/sse",
+      "auth": {
+        "type": "bearer",
+        "env": "EXPENSE_MCP_BEARER_JWT"
+      }
+    }
+  },
+  "tools": [
+    "orders.get_order",
+    "orders.create_refund",
+    "llm.chat",
+    "rag.retrieve_and_generate"
+  ],
+  "resources": [
+    "expense://catalogue"
+  ],
+  "langsmith_project": "expense-mcp-server",
+  "forward_hook": {
+    "w7d5": "This server is the source-of-truth adapter for the W7D5 hand-off; downstream clients should discover tools via tools/list and never bypass the adapter to reach Spring directly."
+  }
+}

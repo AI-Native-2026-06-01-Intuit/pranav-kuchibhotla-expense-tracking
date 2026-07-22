@@ -1,0 +1,15 @@
+{
+  "tool": "llm.chat",
+  "args": {
+    "messages": [{"role": "user", "content": "summarize a starbucks receipt in one line"}],
+    "max_tokens": 64,
+    "tenant_id": "tenant-a"
+  },
+  "expected": {
+    "text": "One-line summary of the Starbucks receipt.",
+    "model": "claude-sonnet-4-5",
+    "usage_input_tokens": 12,
+    "usage_output_tokens": 8,
+    "cost_usd_minor": 1
+  }
+}

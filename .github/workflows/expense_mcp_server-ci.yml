@@ -1,0 +1,166 @@
+name: expense-mcp-server-ci
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "expense-mcp-server/**"
+      - "expense-ai/**"
+      - ".github/workflows/expense_mcp_server-ci.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "expense-mcp-server/**"
+      - "expense-ai/**"
+      - ".github/workflows/expense_mcp_server-ci.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: expense-mcp-server-ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  pr-gate:
+    name: PR-tier gates
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: expense-mcp-server
+    steps:
+      - name: Checkout
+        uses: actions/checkout@8ade135a41bc03ea155e62e844d188df1ea18608
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@b75a909f75acd358c2196fb9a5f1299a9a8868a4
+        with:
+          version: "0.4.18"
+
+      - name: Install Python 3.12
+        run: uv python install 3.12
+
+      - name: Sync dependencies (frozen)
+        run: uv sync --frozen
+
+      - name: Ruff lint
+        run: uv run ruff check
+
+      - name: Ruff format check
+        run: uv run ruff format --check
+
+      - name: Mypy strict
+        run: uv run mypy --strict src/ tests/
+
+      - name: Unit + schema + error + tool tests
+        run: |
+          uv run pytest -v \
+            tests/test_schemas.py \
+            tests/test_errors.py \
+            tests/test_orders_tools.py \
+            tests/test_llm_tool.py \
+            tests/test_rag_tool.py \
+            tests/test_resources.py \
+            tests/test_lifespan_and_telemetry.py
+
+      - name: Description-quality gate
+        run: uv run pytest -v tests/test_tool_descriptions.py
+
+      - name: stdio subprocess smoke
+        run: uv run pytest -v tests/test_smoke_stdio.py
+
+      - name: SSE bearer auth
+        run: uv run pytest -v tests/test_sse_auth.py
+
+      - name: Fixture replay
+        run: |
+          uv run pytest -v tests/test_replay.py
+          uv run python -m expense_mcp_server.scripts.replay \
+            --fixtures tests/fixtures/ \
+            --out .replay/latest.json
+
+      - name: Coverage gate (fail-under 85)
+        run: uv run pytest --cov=src --cov-fail-under=85 -q
+
+      - name: Wheel build
+        run: uv build
+
+      - name: Guardrail greps (no secrets, no bare except, no float money, no prints)
+        working-directory: .
+        run: |
+          set -euxo pipefail
+          # Search only under expense-mcp-server. The workflow file itself
+          # contains these token prefixes inside grep patterns, so we
+          # skip it here and cover it separately below.
+          # No real LangSmith personal tokens.
+          ! grep -RIn --exclude-dir=docs "lsv2_pt_" expense-mcp-server
+          # No real Anthropic keys.
+          ! grep -RIn --exclude-dir=docs "sk-ant-" expense-mcp-server
+          # No pasted JWT payloads (eyJ prefix). .env.example placeholders
+          # and docs prose are excluded — production secrets never live there.
+          ! grep -RIn --exclude=".env.example" --exclude-dir=docs "eyJ" expense-mcp-server
+          # No bare except.
+          ! grep -RIn "except:" \
+            expense-mcp-server/src expense-mcp-server/tests
+          # No float money in tool code.
+          ! grep -RIn "amount: float" \
+            expense-mcp-server/src/expense_mcp_server/tools
+          # No print in server package (transport smoke tests would fail
+          # first, but this catches accidental prints outside tools too).
+          ! grep -RIn "^[^#]*\bprint(" \
+            expense-mcp-server/src/expense_mcp_server
+
+  e2e-merge:
+    name: Testcontainers E2E (merge-to-main)
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    needs: [pr-gate]
+    defaults:
+      run:
+        working-directory: expense-mcp-server
+    steps:
+      - name: Checkout
+        uses: actions/checkout@8ade135a41bc03ea155e62e844d188df1ea18608
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Build expense-api Docker image
+        working-directory: .
+        run: |
+          ./gradlew -p expense-api bootJar
+          docker build -t expense-api:e2e expense-api
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@b75a909f75acd358c2196fb9a5f1299a9a8868a4
+        with:
+          version: "0.4.18"
+
+      - name: Install Python 3.12
+        run: uv python install 3.12
+
+      - name: Sync dependencies (frozen)
+        run: uv sync --frozen
+
+      - name: Run Testcontainers E2E
+        env:
+          EXPENSE_MCP_E2E_IMAGE: expense-api:e2e
+          # Placeholder synthetic JWT used only by the E2E boundary test;
+          # the Spring app's test profile accepts it via spring-security-test
+          # instrumentation, never against a real identity provider.
+          EXPENSE_MCP_E2E_JWT: synthetic-e2e-only
+        run: |
+          uv run pytest -v tests/test_e2e_mcp_to_spring.py -rs
+
+      - name: Upload replay evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mcp-e2e-replay
+          path: expense-mcp-server/.replay/latest.json
+          if-no-files-found: ignore

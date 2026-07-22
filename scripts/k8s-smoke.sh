@@ -104,6 +104,14 @@ check_http_reachable() {
 
 check_json_up /actuator/health/readiness
 check_http_reachable /api/v1/merchants/mer_synth_001
+# W7D4 synthetic orders surface. Same unauth check — a 401 from
+# /api/v1/orders/{id} proves the route is wired, Spring Security is
+# active, and the SyntheticOrder JPA entity resolved against a table
+# that actually exists (a missing V5 migration surfaces earlier as a
+# Hibernate schema-validation failure that keeps the Pod out of
+# readiness, so this reaches the smoke stage only when the migration
+# has been applied and the app is fully up).
+check_http_reachable /api/v1/orders/ord-synth-9001
 check_json_up /actuator/health/liveness
 
 echo "k8s-smoke: all checks passed"

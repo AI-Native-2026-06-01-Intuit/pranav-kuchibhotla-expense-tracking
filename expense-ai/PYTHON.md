@@ -303,3 +303,126 @@ Rejected or corrected:
   after the 2026-07-20 cohort amendment — the eval now runs on a
   15-row deterministic subset (`tests/test_ragas_gate.py::
   _deterministic_subset`), with the 50-row shape gate preserved.
+
+---
+
+## W7D4 — MCP publishing surface
+
+W7D4 adds a **sibling** uv project (`expense-mcp-server/`) that
+publishes the Spring REST endpoints and the W7D3 in-process RAG
+pipeline behind one FastMCP server. `expense-ai` stays unchanged; the
+MCP project depends on it via `[tool.uv.sources]` path dependency.
+
+### Four tools + one resource
+
+| Surface                       | Purpose                                                                 |
+| ----------------------------- | ----------------------------------------------------------------------- |
+| `orders.get_order`            | Tenant-scoped read against `GET /api/v1/orders/{id}` on `expense-api`.  |
+| `orders.create_refund`        | Idempotent write against `POST /api/v1/orders/{id}/refunds` with UUID v4. |
+| `llm.chat`                    | Bounded chat proxy call; 429s map to MCP code 4290.                     |
+| `rag.retrieve_and_generate`   | Calls `expense_ai.rag.retrieve_and_generate` in-process (asyncio.to_thread + wait_for). |
+| `expense://catalogue`         | Read-only server + tool catalogue with tenant list and corpus stats.    |
+
+### Contract highlights
+
+- **Pydantic v2 with `extra="forbid"`** on every input; JSON schemas
+  expose `additionalProperties: false` and unit tests assert it.
+- **Decimal everywhere for money**; refund amounts travel on the wire
+  as JSON strings (`"amount": "10.00"`) so no parser can silently widen
+  to float.
+- **UUID v4 idempotency keys** for `orders.create_refund` are validated
+  in the schema and echoed into both the JSON body and the
+  `Idempotency-Key` HTTP header. The Spring side enforces
+  `(order_id, idempotency_key)` uniqueness at the storage layer, so a
+  repeat call returns the same `refund_id` and never debits twice.
+- **JWT forwarding + cryptographic verification.** stdio uses
+  `EXPENSE_MCP_BEARER_JWT` from the process environment. SSE verifies
+  incoming bearers cryptographically at the Starlette middleware
+  boundary: `JwtVerifier` fetches a JWKS document from
+  `EXPENSE_MCP_JWKS_URL` (bounded TTL, PyJWKClient), rejects `alg=none`
+  and any algorithm outside an RS256/ES256 allow-list, and calls
+  `jwt.decode` with an explicit `require=["exp","aud"]` plus signature,
+  audience, and optional issuer (`EXPENSE_MCP_JWT_ISSUER`) checks. Only
+  after verification succeeds does the middleware bind the verified
+  tenant claim into the request `ContextVar`. Missing config causes
+  `build_app()` to raise — there is no presence-only fallback. Every
+  rejection returns the same externally-visible forbidden response so
+  a caller cannot oracle which check failed.
+- **Central HTTP → McpError mapping** lives in `errors.py::map_http`.
+  Every HTTP status has one canonical code (400→4001, 401/403→4030,
+  404→4040, 409→4090, 429→4290, 5xx→5030, RAG timeout→5040), covered
+  by parametrized unit tests.
+- **stderr-only logging.** stdlib logging and `structlog.JSONRenderer`
+  both write to `sys.stderr`; `stdout` is reserved for JSON-RPC frames.
+  A subprocess smoke test drives 100 `tools/list` calls and asserts no
+  stray stdout text.
+- **CI split**: the PR-tier job runs uv sync, ruff, mypy strict, unit
+  tests, description-quality gate, stdio subprocess smoke, SSE auth
+  tests, fixture replay, coverage ≥85, wheel build, and guardrail
+  greps. The merge-to-main job builds an `expense-api` Docker image
+  and runs the Testcontainers E2E that asserts the same idempotency
+  key returns the same `refund_id`.
+
+### Prerequisite gap and how it was closed
+
+The W7D4 rubric assumes a W3D1 `expense-orders` service. This
+capstone repo does not ship one, so the smallest possible synthetic
+surface was added to the Java app: `SyntheticOrder`/`SyntheticRefund`
+entities, a `V5__orders_refunds.sql` Flyway migration seeding
+`ord-synth-9001` for `tenant-a`, and an `OrderController` with the two
+routes the MCP adapter targets. The MCP server itself contains no
+refund business logic — it only marshals DTOs and maps errors.
+
+### How W7D5 consumes this
+
+W7D5 discovers tools through the SSE transport's `tools/list` and
+calls them through the same MCP surface Claude Desktop uses. The
+`mcp.json` `forward_hook` block flags the adapter as the source of
+truth so future clients do not bypass it and hit Spring directly.
+
+### AI deviations (W7D4)
+
+Deviations Claude Code applied (or corrected on user push-back)
+during the W7D4 build:
+
+- **Raw RAG output → bounded `RagAnswer` DTO.** The W7D3
+  `retrieve_and_generate` returns `dict[str, object]` with internal
+  keys like `cache_hit`; the MCP adapter drops those, truncates
+  citations to `top_k`, and coerces scores to plain floats before
+  handing the answer back to the client.
+- **Float money → `Decimal` end-to-end.** Refund amounts on the wire
+  travel as strings and parse back into `Decimal`; there is no `float`
+  in the money path anywhere in the tool code.
+- **Added required UUID v4 idempotency key.** The `orders.create_refund`
+  schema enforces `version == 4` and forwards the same UUID in both
+  body and header so upstream drift is caught immediately.
+- **Logs moved from stdout to stderr.** Any `print` in server code
+  would corrupt stdio JSON-RPC framing; the smoke test enforces this
+  by driving 100 frames through a subprocess and asserting stdout
+  cleanliness.
+- **Centralized duplicated HTTP mappings.** Every tool goes through
+  `errors.map_http`; the mapping table is defined once and covered by
+  parametrized unit tests, so a novel status code cannot leak
+  untranslated.
+- **Corrected assumption that Claude Desktop launcher could `uvx`
+  a path dependency.** The committed `configs/claude_desktop_config.json`
+  uses `uv --directory <PATH> run …` so a path-based project (which
+  cannot be published to a uvx registry) can still be launched by
+  the Desktop app.
+
+Deviations we considered but rejected:
+
+- **Renaming the four tools to match the merchants domain that
+  actually exists in this repo.** Rejected on user push-back: the
+  W7D4 rubric requires the exact names `orders.get_order`,
+  `orders.create_refund`, `llm.chat`, `rag.retrieve_and_generate`,
+  and remapping them to merchant endpoints would break the E2E
+  idempotency contract the rubric asserts.
+- **Shipping SSE with presence-only bearer checking.** A post-merge
+  review flagged that presence-only auth on a network transport was
+  unacceptable. Corrected: `JwtVerifier` (using PyJWT + JWKS with a
+  bounded cache and an RS256/ES256 allow-list) is now wired into the
+  Starlette middleware, `build_app()` fails closed when JWKS or
+  audience is missing, and `tests/test_sse_auth.py` exercises the
+  reject paths with locally-generated RSA key pairs (no committed
+  private key material). Evidence file updated accordingly.

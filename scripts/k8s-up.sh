@@ -133,6 +133,7 @@ kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -
 kubectl create configmap postgres-initdb -n "$NAMESPACE" \
   --from-file=10-schema.sql=db/V1__schema.sql \
   --from-file=30-event-outbox.sql=expense-api/src/main/resources/db/migration/V3__event_outbox.sql \
+  --from-file=50-orders-refunds.sql=expense-api/src/main/resources/db/migration/V5__orders_refunds.sql \
   --dry-run=client -o yaml | kubectl apply -f -
 
 # --- 5. secret ----------------------------------------------------------------

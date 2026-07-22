@@ -1,0 +1,23 @@
+{
+  "tool": "rag.retrieve_and_generate",
+  "args": {
+    "question": "is a laptop deductible under Schedule C?",
+    "tenant_id": "tenant-a",
+    "top_k": 3
+  },
+  "expected": {
+    "answer": "A laptop used exclusively for a Schedule C trade or business is deductible; see cited chunks.",
+    "raw": {
+      "answer": "A laptop used exclusively for a Schedule C trade or business is deductible; see cited chunks.",
+      "citations": [
+        {"chunk_id": "c-001", "doc_id": "doc-sched-c-1", "score": 0.87, "extra": "drop-me"},
+        {"chunk_id": "c-002", "doc_id": "doc-sched-c-1", "score": 0.72},
+        {"chunk_id": "c-003", "doc_id": "doc-irs-pub-535", "score": 0.61},
+        {"chunk_id": "c-004", "doc_id": "doc-irs-pub-535", "score": 0.55}
+      ],
+      "cache_hit": false,
+      "coverage": 0.8,
+      "rerank_timed_out": false
+    }
+  }
+}
