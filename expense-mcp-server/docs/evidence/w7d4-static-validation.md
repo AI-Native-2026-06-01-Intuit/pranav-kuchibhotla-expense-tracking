@@ -57,15 +57,41 @@ Run from repo root (`~/Documents/uptimecrew-expense`):
 
 ## JWT validation level (SSE transport)
 
-The SSE middleware currently enforces a **presence check only**:
-`Authorization: Bearer <non-empty token>` must be present, and the
-token is stored in a `contextvars.ContextVar` for outbound forwarding.
-Cryptographic signature + audience validation is a follow-up that
-plugs a `TokenVerifier` into `FastMCP(auth=…)`; it activates when both
-`EXPENSE_MCP_JWKS_URL` and `EXPENSE_MCP_JWT_AUDIENCE` are configured.
-That code path is not wired in this branch because no configured
-JWKS endpoint was available at build time. This limitation is called
-out here rather than papered over with a fake verifier.
+The SSE middleware verifies bearer tokens **cryptographically**. Every
+incoming request goes through :class:`JwtVerifier`
+(`src/expense_mcp_server/jwt_verifier.py`), which:
+
+- fetches the JWKS document from `EXPENSE_MCP_JWKS_URL` through
+  `PyJWKClient` with a bounded HTTP timeout and a `jwks_cache_ttl_s`
+  TTL (default 15 minutes);
+- rejects `alg=none` and any algorithm outside the explicit allow-list
+  (RS256/RS384/RS512/ES256) before the signature check runs, closing
+  the classic algorithm-confusion vector;
+- selects the signing key by `kid` and triggers exactly one JWKS
+  refresh when an unknown `kid` is seen (legitimate key rotation),
+  then fails closed;
+- runs `jwt.decode` with `require=["exp", "aud"]` and explicit
+  `verify_signature`, `verify_exp`, `verify_aud`, `verify_nbf`, and
+  (when `EXPENSE_MCP_JWT_ISSUER` is set) `verify_iss` flags, so a
+  future PyJWT default cannot silently loosen validation;
+- maps every rejection to a stable internal `reason` category for
+  stderr logs but returns the *same* externally-visible
+  `{"error":{"code":4030,"message":"forbidden"}}` payload for every
+  failure, so an attacker cannot use rejection strings as an oracle;
+- populates the tenant `ContextVar` only from a verified `tenant_id`
+  (or `tenant`) claim — schema-provided tenants that disagree with the
+  verified claim are still rejected by `assert_tenant_matches`.
+
+There is **no presence-only fallback.** `build_app()` raises
+`SseAuthNotConfiguredError` if `EXPENSE_MCP_JWKS_URL` or
+`EXPENSE_MCP_JWT_AUDIENCE` is missing at startup, so a
+misconfigured deployment fails loudly instead of accepting
+unverifiable tokens.
+
+Tests use freshly-generated RSA key pairs (`tests/test_sse_auth.py`)
+so no private key or JWKS fixture is committed to the repository.
+The forged-token case is exercised end-to-end through a Starlette
+TestClient against the actual middleware.
 
 ## Coverage details
 

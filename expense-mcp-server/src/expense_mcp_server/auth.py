@@ -7,20 +7,20 @@ Two boundaries live here:
   verbatim to upstream Spring endpoints. Tool inputs still carry a
   ``tenant_id`` field because the rubric requires it in the schema.
 
-* **SSE/HTTP** — an incoming ``Authorization: Bearer <token>`` header is
-  parsed at the ASGI request boundary. If ``EXPENSE_MCP_JWT_AUDIENCE`` and
-  ``EXPENSE_MCP_JWKS_URL`` are both configured, a cryptographic check
-  should be added by wiring ``mcp.server.auth`` in ``transports/sse.py``.
-  Absent that config, the boundary enforces a **presence** check only —
-  a missing or malformed bearer is rejected with :data:`MCP_FORBIDDEN`
-  — and the raw token is placed onto the tenant context for outbound
-  forwarding. The precise level of validation implemented is documented
-  in ``docs/evidence/w7d4-static-validation.md``.
+* **SSE/HTTP** — the request boundary is
+  :class:`expense_mcp_server.transports.sse.BearerAuthMiddleware`, which
+  parses ``Authorization: Bearer <token>``, hands the token to a
+  :class:`expense_mcp_server.jwt_verifier.JwtVerifier`, and only after a
+  successful cryptographic verification (signature, ``exp``, ``aud``, and
+  optional ``iss``) binds the resulting claims into the request context.
+  There is no presence-only fallback — ``build_app()`` refuses to start
+  when JWKS URL or audience is missing.
 
 Tenant consistency: :func:`assert_tenant_matches` rejects tool
 invocations whose ``tenant_id`` argument does not agree with the
-tenant claim carried in the request context, so a caller cannot use a
-tenant-a token to poke at tenant-b data even if the schema accepted it.
+tenant claim carried in the verified request context, so a caller
+cannot use a tenant-a token to poke at tenant-b data even if the
+schema accepted it.
 """
 
 from __future__ import annotations

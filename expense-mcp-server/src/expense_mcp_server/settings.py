@@ -38,16 +38,21 @@ class Settings(BaseSettings):
 
     jwt_audience: str = Field(default="")
     jwks_url: str = Field(default="")
+    jwt_issuer: str = Field(default="")
+    # Refresh cadence for the JWKS document. A shorter window is safer but
+    # noisier; 15 min matches common IdP key-rotation cadences.
+    jwks_cache_ttl_s: float = Field(default=900.0, gt=0)
 
     postgres_dsn: str = Field(default="")
     redis_url: str = Field(default="")
 
     def has_jwt_validation(self) -> bool:
-        """Whether the SSE transport should cryptographically validate incoming JWTs.
+        """Whether the SSE transport is configured for cryptographic JWT verification.
 
-        Both an audience and a JWKS URL must be configured for signature
-        checks to be enabled; otherwise the transport falls back to a
-        presence check (bearer must be non-empty) documented in ``auth.py``.
+        Both an audience and a JWKS URL must be configured. There is no
+        presence-only fallback: :func:`transports.sse.build_app` raises at
+        startup when this returns False, so an unverifiable token can never
+        traverse the network transport.
         """
         return bool(self.jwt_audience) and bool(self.jwks_url)
 

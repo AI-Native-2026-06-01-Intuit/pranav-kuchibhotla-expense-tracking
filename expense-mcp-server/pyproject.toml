@@ -16,6 +16,7 @@ dependencies = [
     "langsmith>=0.1.80",
     "structlog>=24.1",
     "expense-ai",
+    "pyjwt[crypto]>=2.8",
 ]
 
 [project.scripts]

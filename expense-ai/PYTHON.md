@@ -335,11 +335,19 @@ MCP project depends on it via `[tool.uv.sources]` path dependency.
   `Idempotency-Key` HTTP header. The Spring side enforces
   `(order_id, idempotency_key)` uniqueness at the storage layer, so a
   repeat call returns the same `refund_id` and never debits twice.
-- **JWT forwarding** — stdio uses `EXPENSE_MCP_BEARER_JWT` from the
-  process environment; SSE parses `Authorization: Bearer …` at the
-  Starlette middleware boundary and stores tenant + token in a
-  `contextvars.ContextVar`. Tenant mismatch between the request context
-  and the tool argument raises MCP code 4030.
+- **JWT forwarding + cryptographic verification.** stdio uses
+  `EXPENSE_MCP_BEARER_JWT` from the process environment. SSE verifies
+  incoming bearers cryptographically at the Starlette middleware
+  boundary: `JwtVerifier` fetches a JWKS document from
+  `EXPENSE_MCP_JWKS_URL` (bounded TTL, PyJWKClient), rejects `alg=none`
+  and any algorithm outside an RS256/ES256 allow-list, and calls
+  `jwt.decode` with an explicit `require=["exp","aud"]` plus signature,
+  audience, and optional issuer (`EXPENSE_MCP_JWT_ISSUER`) checks. Only
+  after verification succeeds does the middleware bind the verified
+  tenant claim into the request `ContextVar`. Missing config causes
+  `build_app()` to raise — there is no presence-only fallback. Every
+  rejection returns the same externally-visible forbidden response so
+  a caller cannot oracle which check failed.
 - **Central HTTP → McpError mapping** lives in `errors.py::map_http`.
   Every HTTP status has one canonical code (400→4001, 401/403→4030,
   404→4040, 409→4090, 429→4290, 5xx→5030, RAG timeout→5040), covered
@@ -410,8 +418,11 @@ Deviations we considered but rejected:
   `orders.create_refund`, `llm.chat`, `rag.retrieve_and_generate`,
   and remapping them to merchant endpoints would break the E2E
   idempotency contract the rubric asserts.
-- **Wiring cryptographic JWT verification into the SSE transport
-  without configured JWKS.** Rejected — the presence-check-only mode
-  is documented honestly in `docs/evidence/w7d4-static-validation.md`;
-  fabricating a signature check without a real JWKS endpoint would be
-  worse than saying so.
+- **Shipping SSE with presence-only bearer checking.** A post-merge
+  review flagged that presence-only auth on a network transport was
+  unacceptable. Corrected: `JwtVerifier` (using PyJWT + JWKS with a
+  bounded cache and an RS256/ES256 allow-list) is now wired into the
+  Starlette middleware, `build_app()` fails closed when JWKS or
+  audience is missing, and `tests/test_sse_auth.py` exercises the
+  reject paths with locally-generated RSA key pairs (no committed
+  private key material). Evidence file updated accordingly.
