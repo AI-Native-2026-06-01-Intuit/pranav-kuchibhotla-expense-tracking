@@ -1,0 +1,9 @@
+{
+  "tool": "orders.get_order",
+  "args": {"order_id": "ord-synth-9002", "tenant_id": "tenant-b"},
+  "expected": {
+    "order_id": "ord-synth-9002",
+    "total": "42.50",
+    "status": "REFUNDED"
+  }
+}
