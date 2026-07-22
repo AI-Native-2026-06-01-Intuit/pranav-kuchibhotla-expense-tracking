@@ -46,6 +46,15 @@ end-to-end entry point, an Airflow TaskFlow ingest DAG, and a 15-row
 RAGAS faithfulness gate (`>= 0.85`). Before/after report at
 [`expense-ai/docs/ragas/w7d3.md`](expense-ai/docs/ragas/w7d3.md).
 
+**W7D4:** MCP publishing — a sibling uv project (`expense-mcp-server/`)
+exposes four tools (`orders.get_order`, `orders.create_refund`,
+`llm.chat`, `rag.retrieve_and_generate`) plus an `expense://catalogue`
+resource behind FastMCP with stdio + SSE transports. See
+[`expense-mcp-server/README.md`](expense-mcp-server/README.md), the
+W7D4 section of [`expense-ai/PYTHON.md`](expense-ai/PYTHON.md), and
+the evidence log at
+[`expense-mcp-server/docs/evidence/w7d4-static-validation.md`](expense-mcp-server/docs/evidence/w7d4-static-validation.md).
+
 ## Domain types
 
 - `Transaction` — a single expense entry (amount, date, merchant, kind, category)
