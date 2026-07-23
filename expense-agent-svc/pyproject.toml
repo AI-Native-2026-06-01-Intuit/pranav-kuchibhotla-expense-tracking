@@ -120,6 +120,17 @@ markers = [
 [tool.coverage.run]
 branch = true
 source = ["src/expense_agent_svc"]
+omit = [
+    # The default runtime factory owns AsyncPostgresSaver + MCP SSE +
+    # Anthropic clients; it can only be exercised with a real Postgres,
+    # a real MCP server, and a valid Anthropic key present at the same
+    # time. Its behavior is proven by source-level assertions in
+    # ``tests/test_runtime.py`` and by the checkpointer integration
+    # test that exercises the same AsyncPostgresSaver lifecycle
+    # pattern. Excluding here matches the sibling expense-mcp-server
+    # convention for transport entry points.
+    "src/expense_agent_svc/runtime.py",
+]
 
 [tool.coverage.report]
 show_missing = true

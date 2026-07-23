@@ -79,6 +79,20 @@ class Settings(BaseSettings):
     port: int = Field(default=8080, ge=1, le=65535)
     environment: str = Field(default="dev")
 
+    # --- LLM cost rates (integer 1e-5 USD per million tokens) ---
+    # These feed BudgetGuard.record_usage. They are configuration, not
+    # authoritative billing — the llm-proxy / CloudWatch metric remains
+    # the source of truth for what the platform actually spent. Keeping
+    # local integer rates makes the per-request ceiling deterministic.
+    input_rate_usd_e5_per_million: int = Field(default=300, ge=0)
+    output_rate_usd_e5_per_million: int = Field(default=1_500, ge=0)
+
+    # --- Optional llm-proxy base URL for Anthropic clients ---
+    # When set, all three Anthropic clients (retrieval/api/synthesis) go
+    # through the proxy. Empty string means "use the default Anthropic
+    # endpoint" — required for local runs without the proxy running.
+    anthropic_base_url: str = Field(default="")
+
     # --- Local / CI ergonomics ---
     allow_external_eval_skip: bool = Field(default=False)
 
