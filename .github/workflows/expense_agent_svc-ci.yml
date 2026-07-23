@@ -1,0 +1,450 @@
+name: expense-agent-svc-ci
+
+# W7D5 capstone CI for expense-agent-svc.
+#
+# PR: lint + strict mypy + tests + coverage + deterministic gate +
+#     external RAGAS gate + Docker build + kustomize/kubectl static
+#     validation + CFN validate-template + frontend build + upstream
+#     regression checks. Every `uses:` reference below is pinned to a
+#     full 40-character commit SHA (see the committed test
+#     tests/test_ci_workflow.py that enforces this at PR time).
+#
+# main push: ECR preflight -> build + push (SHA tag only, never
+# :latest) -> config-repo image bump via the reusable
+# _bump-config.yml workflow.
+
+on:
+  pull_request:
+    paths:
+      - "expense-agent-svc/**"
+      - "expense-ai/**"
+      - "expense-mcp-server/**"
+      - "expense-web/**"
+      - ".github/workflows/expense_agent_svc-ci.yml"
+  push:
+    branches: [main]
+    paths:
+      - "expense-agent-svc/**"
+      - "expense-ai/**"
+      - "expense-mcp-server/**"
+      - "expense-web/**"
+      - ".github/workflows/expense_agent_svc-ci.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: expense-agent-svc-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  AWS_REGION: us-east-1
+  ECR_ACCOUNT_ID: "726695008378"
+  ECR_REPOSITORY: expense-agent-svc
+
+jobs:
+  # -----------------------------------------------------------------
+  # PR quality: ruff, mypy, tests + coverage, deterministic eval.
+  # Runs Postgres 16 as a service so the checkpoint-resume integration
+  # tests exercise the real AsyncPostgresSaver.
+  # -----------------------------------------------------------------
+  quality:
+    name: quality (ruff/mypy/pytest/deterministic-gate)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@b75a909f75acd358c2196fb9a5f1299a9a8868a4 # v6.6.0
+        with:
+          version: "0.4.18"
+          python-version: "3.12"
+
+      - name: Resolve agent-svc dependencies
+        working-directory: expense-agent-svc
+        run: uv sync --frozen
+
+      - name: Import smoke
+        working-directory: expense-agent-svc
+        run: uv run python -c "import fastapi, langgraph, instructor, mcp; print('imports ok')"
+
+      - name: Ruff lint
+        working-directory: expense-agent-svc
+        run: uv run ruff check
+
+      - name: Ruff format check
+        working-directory: expense-agent-svc
+        run: uv run ruff format --check
+
+      - name: mypy --strict src/ tests/ evals/
+        working-directory: expense-agent-svc
+        run: uv run mypy --strict src/ tests/ evals/
+
+      - name: pytest + coverage (excluding external + docker markers)
+        working-directory: expense-agent-svc
+        env:
+          # Local Postgres reachable at the service's mapped port.
+          EXPENSE_AGENT_TEST_POSTGRES_URL: postgresql://postgres:postgres@localhost:5432/postgres
+        run: |
+          uv run pytest -v \
+            -m "not external and not docker" \
+            --cov=src \
+            --cov-fail-under=85
+
+      - name: Deterministic trajectory + cost gate
+        working-directory: expense-agent-svc
+        # NOTE: EXPENSE_AGENT_ALLOW_EXTERNAL_EVAL_SKIP is intentionally
+        # NOT set here — the default --gate mode does not require any
+        # external credentials.
+        run: uv run python -m expense_agent_svc.scripts.eval --gate
+
+  # -----------------------------------------------------------------
+  # External RAGAS faithfulness — separate job so a provider-cap /
+  # evaluator failure is reported distinctly from the deterministic gate.
+  # No local-skip flag is exported: missing credentials MUST fail.
+  # -----------------------------------------------------------------
+  external-eval:
+    name: external RAGAS faithfulness (>=0.85)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    needs: quality
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@b75a909f75acd358c2196fb9a5f1299a9a8868a4 # v6.6.0
+        with:
+          version: "0.4.18"
+          python-version: "3.12"
+
+      - name: Resolve agent-svc dependencies
+        working-directory: expense-agent-svc
+        run: uv sync --frozen
+
+      - name: External RAGAS faithfulness gate
+        working-directory: expense-agent-svc
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          LANGSMITH_API_KEY: ${{ secrets.LANGSMITH_API_KEY }}
+          LANGSMITH_PROJECT: expense-agent-svc-ci
+        run: uv run python -m expense_agent_svc.scripts.eval --gate --external
+
+  # -----------------------------------------------------------------
+  # Docker build (repo-root context — path deps on expense-ai and
+  # expense-mcp-server require it). Import smoke inside the image.
+  # -----------------------------------------------------------------
+  docker:
+    name: docker build + image import smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    needs: quality
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Setup Buildx
+        uses: docker/setup-buildx-action@c47758b77c9736f4b2ef4073d4d51994fabfe349 # v3.7.1
+
+      - name: Docker build (repo-root context)
+        uses: docker/build-push-action@48aba3b46d1b1fec4febb7c5d0c644b249a11355 # v6.10.0
+        with:
+          context: .
+          file: expense-agent-svc/Dockerfile
+          load: true
+          push: false
+          tags: expense-agent-svc:${{ github.sha }}
+
+      - name: Image import smoke
+        run: |
+          docker run --rm --entrypoint python \
+            expense-agent-svc:${{ github.sha }} \
+            -c "from expense_agent_svc.app import create_app; print('image import ok')"
+
+  # -----------------------------------------------------------------
+  # Deployment static validation: parse Argo Application YAML, render
+  # Kustomize, kubectl client dry-run, static CFN template parse.
+  # AWS-authenticated validate-template runs in the aws-validate job
+  # below only when the OIDC role variable is configured.
+  # -----------------------------------------------------------------
+  deploy-static:
+    name: deployment artifacts static validation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    needs: quality
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@b75a909f75acd358c2196fb9a5f1299a9a8868a4 # v6.6.0
+        with:
+          version: "0.4.18"
+          python-version: "3.12"
+
+      - name: Install kustomize + kubectl
+        run: |
+          set -euo pipefail
+          curl -sSL -o /tmp/kustomize.tar.gz \
+            https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv5.4.3/kustomize_v5.4.3_linux_amd64.tar.gz
+          tar -xzf /tmp/kustomize.tar.gz -C /usr/local/bin kustomize
+          curl -sSL -o /usr/local/bin/kubectl \
+            https://dl.k8s.io/release/v1.30.4/bin/linux/amd64/kubectl
+          chmod +x /usr/local/bin/kubectl
+          kustomize version
+          kubectl version --client=true
+
+      - name: Kustomize render (prod overlay)
+        run: |
+          kustomize build expense-agent-svc/gitops/overlays/prod \
+            > /tmp/expense-agent-svc-prod.yaml
+
+      - name: kubectl client dry-run
+        run: |
+          kubectl apply --dry-run=client -f /tmp/expense-agent-svc-prod.yaml
+
+      - name: Resolve agent-svc dev deps for deployment tests
+        working-directory: expense-agent-svc
+        run: uv sync --frozen
+
+      - name: Deployment artefact tests
+        working-directory: expense-agent-svc
+        run: uv run pytest -v tests/test_deployment_artifacts.py tests/test_ci_workflow.py
+
+  # -----------------------------------------------------------------
+  # AWS CloudFormation validate-template — requires the platform's
+  # OIDC validation role. When the repo variable is not configured,
+  # the preflight fails with a precise, operator-actionable message.
+  # -----------------------------------------------------------------
+  aws-validate:
+    name: aws cloudformation validate-template
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    needs: quality
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Preflight — required repository variable
+        env:
+          ROLE_ARN: ${{ vars.EXPENSE_AGENT_AWS_VALIDATION_ROLE_ARN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${ROLE_ARN}" ]; then
+            echo "::error::Repository variable EXPENSE_AGENT_AWS_VALIDATION_ROLE_ARN is empty. Configure it (arn:aws:iam::726695008378:role/<validation-role>) before rerunning this workflow." >&2
+            exit 1
+          fi
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@5579c002bb4778aa43395ef1df492868a9a1c83f # v4.0.2
+        with:
+          role-to-assume: ${{ vars.EXPENSE_AGENT_AWS_VALIDATION_ROLE_ARN }}
+          role-session-name: gha-agent-svc-cfn-validate-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: aws cloudformation validate-template
+        run: |
+          aws cloudformation validate-template \
+            --template-body file://expense-agent-svc/cfn/agent-svc-budget.yaml \
+            --region "${AWS_REGION}"
+
+  # -----------------------------------------------------------------
+  # Frontend: install with the committed lockfile, run the existing
+  # scripts. Nothing here weakens pre-existing lint or coverage gates.
+  # -----------------------------------------------------------------
+  frontend:
+    name: frontend (test + typecheck + lint + build)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: expense-web/package-lock.json
+
+      - name: Install (frozen)
+        working-directory: expense-web
+        run: npm ci
+
+      - name: vitest
+        working-directory: expense-web
+        run: npm run test -- --run
+
+      - name: typecheck
+        working-directory: expense-web
+        run: npm run typecheck
+
+      - name: eslint
+        working-directory: expense-web
+        run: npm run lint
+
+      - name: vite build
+        working-directory: expense-web
+        run: npm run build
+
+  # -----------------------------------------------------------------
+  # Upstream regression checks (never weaken the existing suites).
+  # -----------------------------------------------------------------
+  regression-mcp:
+    name: regression (expense-mcp-server)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Setup uv
+        uses: astral-sh/setup-uv@b75a909f75acd358c2196fb9a5f1299a9a8868a4 # v6.6.0
+        with:
+          version: "0.4.18"
+          python-version: "3.12"
+      - name: uv sync --frozen
+        working-directory: expense-mcp-server
+        run: uv sync --frozen
+      - name: ruff
+        working-directory: expense-mcp-server
+        run: uv run ruff check
+      - name: mypy --strict
+        working-directory: expense-mcp-server
+        run: uv run mypy --strict src/ tests/
+      - name: pytest (excluding docker marker)
+        working-directory: expense-mcp-server
+        run: uv run pytest -q -m "not docker"
+
+  regression-ai:
+    name: regression (expense-ai)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Setup uv
+        uses: astral-sh/setup-uv@b75a909f75acd358c2196fb9a5f1299a9a8868a4 # v6.6.0
+        with:
+          version: "0.4.18"
+          python-version: "3.12"
+      - name: uv sync --frozen
+        working-directory: expense-ai
+        run: uv sync --frozen
+      - name: ruff
+        working-directory: expense-ai
+        run: uv run ruff check
+      - name: mypy --strict
+        working-directory: expense-ai
+        run: uv run mypy --strict src/ tests/
+      - name: pytest (deselect external evaluator tests)
+        working-directory: expense-ai
+        # No skip flag exported — we only run the non-external suite.
+        # The external RAGAS gate for expense-ai is exercised in its
+        # own workflow.
+        run: uv run pytest -q -m "not external"
+
+  # -----------------------------------------------------------------
+  # Merge-to-main: ECR preflight -> build+push (SHA only) -> bump
+  # sibling config repo overlay. NEVER pushes :latest and NEVER
+  # creates the ECR repository.
+  # -----------------------------------------------------------------
+  build-and-push:
+    name: build + push (main only)
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    needs:
+      - quality
+      - docker
+      - deploy-static
+      - frontend
+      - regression-mcp
+      - regression-ai
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Preflight — required repository variable
+        env:
+          ROLE_ARN: ${{ vars.EXPENSE_AGENT_DEPLOY_ROLE_ARN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${ROLE_ARN}" ]; then
+            echo "::error::Repository variable EXPENSE_AGENT_DEPLOY_ROLE_ARN is empty. Configure it (an OIDC role with ECR push permissions on ${ECR_REPOSITORY}) before rerunning the merge deployment." >&2
+            exit 1
+          fi
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@5579c002bb4778aa43395ef1df492868a9a1c83f # v4.0.2
+        with:
+          role-to-assume: ${{ vars.EXPENSE_AGENT_DEPLOY_ROLE_ARN }}
+          role-session-name: gha-agent-svc-push-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: sts get-caller-identity
+        run: aws sts get-caller-identity --region "${AWS_REGION}"
+
+      - name: ECR preflight (repository must exist)
+        run: bash expense-agent-svc/scripts/ecr_preflight.sh
+
+      - name: Login to Amazon ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@4625ce35226a7557230889aae2f52eb50ec3dcda # v2.0.1
+
+      - name: Setup Buildx
+        uses: docker/setup-buildx-action@c47758b77c9736f4b2ef4073d4d51994fabfe349 # v3.7.1
+
+      - name: Docker build + push (SHA tag only)
+        uses: docker/build-push-action@48aba3b46d1b1fec4febb7c5d0c644b249a11355 # v6.10.0
+        with:
+          context: .
+          file: expense-agent-svc/Dockerfile
+          push: true
+          tags: ${{ steps.ecr-login.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
+
+      - name: Verify pushed digest
+        run: |
+          aws ecr describe-images \
+            --repository-name "${ECR_REPOSITORY}" \
+            --image-ids imageTag=${{ github.sha }} \
+            --region "${AWS_REGION}"
+
+  # -----------------------------------------------------------------
+  # Bump the sibling config repo's expense-agent-svc prod overlay to
+  # the freshly pushed SHA. Uses the reusable workflow that already
+  # ships in this repo.
+  # -----------------------------------------------------------------
+  bump-config:
+    name: bump config repo overlay
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: build-and-push
+    uses: ./.github/workflows/_bump-config.yml
+    with:
+      image-name: 726695008378.dkr.ecr.us-east-1.amazonaws.com/expense-agent-svc
+      image-sha: ${{ github.sha }}
+      gitops-repository: AI-Native-2026-06-01-Intuit/pranav-kuchibhotla-expense-config
+      overlay-path: expense-agent-svc/overlays/prod
+      gitops-base-branch: main
+    secrets: inherit
