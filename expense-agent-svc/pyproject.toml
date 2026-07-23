@@ -61,7 +61,7 @@ python_version = "3.12"
 disallow_any_explicit = false
 warn_return_any = true
 warn_unused_ignores = true
-files = ["src", "tests"]
+files = ["src", "tests", "evals"]
 plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]

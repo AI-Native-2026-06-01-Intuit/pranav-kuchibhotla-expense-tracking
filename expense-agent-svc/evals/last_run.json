@@ -1,0 +1,8 @@
+{
+  "source": "deterministic_fixture",
+  "note": "Committed baseline for the deterministic --gate cost regression check. Computed once from the 20 scenarios in scenarios.jsonl using the fake-node runner in scripts/eval.py. This is NOT a measured production cost — the field name says so. Regenerate with `uv run python -m expense_agent_svc.scripts.eval --gate --report evals/last_run_new.json` and manually replace this file (never overwritten by a failing gate).",
+  "scenario_count": 20,
+  "mean_cost_usd_e5": 142.5,
+  "faithfulness": null,
+  "external_metric_status": "not_measured"
+}
