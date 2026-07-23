@@ -369,3 +369,274 @@ def test_runtime_wires_real_api_model_invoke_not_the_phase14_stub() -> None:
     assert "_unwired_model_invoke" not in text, "Phase 15 must replace the Phase 14 placeholder"
     assert "make_retrieval_callable" in text, "the production retrieval callable must be wired"
     assert "_require_mcp_configuration" in text, "the fail-closed MCP check must run at startup"
+
+
+# ---------- Query rewriter (Phase 15 leftover finished in Phase 16) ---------
+
+
+from expense_agent_svc.runtime import make_query_rewriter  # noqa: E402
+
+
+class _UsageBearingResponse:
+    class _Usage:
+        def __init__(self, input_tokens: int, output_tokens: int) -> None:
+            self.input_tokens = input_tokens
+            self.output_tokens = output_tokens
+
+    class _Block:
+        def __init__(self, text: str) -> None:
+            self.type = "text"
+            self.text = text
+
+    def __init__(
+        self,
+        text: str,
+        input_tokens: int = 1_000_000,
+        output_tokens: int = 500_000,
+    ) -> None:
+        self.content = [_UsageBearingResponse._Block(text)]
+        self.usage = _UsageBearingResponse._Usage(input_tokens, output_tokens)
+
+
+class _AsyncMessages:
+    def __init__(self, canned: _UsageBearingResponse) -> None:
+        self.canned = canned
+        self.calls: list[dict[str, object]] = []
+
+    async def create(self, **kwargs: object) -> _UsageBearingResponse:
+        self.calls.append(kwargs)
+        return self.canned
+
+
+class _FakeAsyncAnthropic:
+    def __init__(self, canned: _UsageBearingResponse) -> None:
+        self.messages = _AsyncMessages(canned)
+
+
+@pytest.mark.asyncio
+async def test_query_rewriter_captures_real_usage_and_returns_bounded_text() -> None:
+    """The production rewriter must (a) call messages.create with the
+    configured model, (b) return the raw text bounded to the max, and
+    (c) compute integer cost from real usage."""
+    canned = _UsageBearingResponse("refund policy for ord-synth-9001 tenant-a")
+    client = _FakeAsyncAnthropic(canned)
+    rewriter = make_query_rewriter(
+        retrieval_anthropic=client,
+        model_name="claude-fake",
+        input_rate_usd_e5_per_million=300,
+        output_rate_usd_e5_per_million=1500,
+        max_tokens=32,
+    )
+    text, cost = await rewriter("policy? ord-synth-9001 tenant-a")
+    # 1M in * 300 + 500K out * 1500 = 300 + 750 = 1050 cost_usd_e5
+    assert cost == 1050
+    assert "ord-synth-9001" in text
+    assert "tenant-a" in text
+    assert len(client.messages.calls) == 1
+    kwargs = client.messages.calls[0]
+    assert kwargs["model"] == "claude-fake"
+    assert kwargs["max_tokens"] == 32
+    # No chain-of-thought / self-quote instructions leaking into user role.
+    messages = kwargs["messages"]
+    assert isinstance(messages, list) and len(messages) == 1
+
+
+@pytest.mark.asyncio
+async def test_query_rewriter_zero_cost_when_usage_missing() -> None:
+    class _NoUsageResponse:
+        def __init__(self) -> None:
+            class _Block:
+                type = "text"
+                text = "answer"
+
+            self.content = [_Block()]
+
+    class _M:
+        async def create(self, **kwargs: object) -> object:
+            del kwargs
+            return _NoUsageResponse()
+
+    class _C:
+        messages = _M()
+
+    rewriter = make_query_rewriter(
+        retrieval_anthropic=_C(),
+        model_name="fake",
+        input_rate_usd_e5_per_million=300,
+        output_rate_usd_e5_per_million=1500,
+    )
+    text, cost = await rewriter("policy?")
+    assert cost == 0
+    assert text == "answer"
+
+
+@pytest.mark.asyncio
+async def test_query_rewriter_bounds_output_length() -> None:
+    long = "x" * 4000
+    canned = _UsageBearingResponse(long, input_tokens=0, output_tokens=0)
+    client = _FakeAsyncAnthropic(canned)
+    rewriter = make_query_rewriter(
+        retrieval_anthropic=client,
+        model_name="fake",
+        input_rate_usd_e5_per_million=300,
+        output_rate_usd_e5_per_million=1500,
+    )
+    text, _ = await rewriter("policy?")
+    assert len(text) <= 400
+
+
+@pytest.mark.asyncio
+async def test_retrieval_node_falls_back_when_rewriter_drops_identifier() -> None:
+    """A rewriter that drops ord-synth-9001 must not silently reach W7D3
+    with an identifier-free query."""
+    from collections.abc import Callable as _Callable
+
+    from expense_agent_svc.budgets import BudgetGuard
+    from expense_agent_svc.dependencies import (
+        AgentDependencies,
+        RequestContext,
+        register_request,
+        release_request,
+    )
+    from expense_agent_svc.nodes.retrieval import retrieval_body_for_tests
+    from expense_agent_svc.settings import Settings
+
+    seen_queries: list[str] = []
+
+    def _retrieve(q: str, t: str) -> dict[str, object]:
+        del t
+        seen_queries.append(q)
+        return {"answer": "", "citations": []}
+
+    async def _rewriter_with_usage(question: str) -> tuple[str, int]:
+        del question
+        # Drop the identifier — should fall back to the original.
+        return "generic refund policy?", 42
+
+    async def _direct_to_thread(func: _Callable[..., object], *args: object) -> object:
+        return func(*args)
+
+    class _StubClient:
+        @property
+        def messages(self) -> object:
+            return object()
+
+    class _FakeMCPSession:
+        async def list_tools(self, cursor: str | None = None) -> object:
+            return object()
+
+        async def call_tool(
+            self,
+            name: str,
+            arguments: dict[str, object] | None = None,
+        ) -> object:
+            return object()
+
+    deps = AgentDependencies(
+        settings=Settings(),
+        mcp_session=cast(Any, _FakeMCPSession()),
+        anthropic=_StubClient(),
+        instructor=_StubClient(),
+        retrieve=_retrieve,
+    )
+    ctx = RequestContext(thread_id="t", tenant_id="tenant-a", budget=BudgetGuard())
+    register_request(ctx)
+    try:
+        result = await retrieval_body_for_tests(
+            {
+                "question": "policy for ord-synth-9001 tenant-a",
+                "tenant_id": "tenant-a",
+                "thread_id": "t",
+                "request_id": ctx.request_id,
+            },
+            dependencies=deps,
+            rewriter_with_usage=_rewriter_with_usage,
+            to_thread=cast(Any, _direct_to_thread),
+        )
+    finally:
+        release_request(ctx.request_id)
+
+    # Fallback query is the original — identifier survived.
+    assert seen_queries == ["policy for ord-synth-9001 tenant-a"]
+    # But the rewrite cost was still recorded on the node's cost_usd_e5.
+    assert result["cost_usd_e5"] == 42
+
+
+@pytest.mark.asyncio
+async def test_budget_exhaustion_prevents_w7d3_retrieval_call() -> None:
+    """If check_or_raise() flags the budget, the retrieval node must NOT
+    call the injected retrieve callable at all — the expensive W7D3
+    pipeline stays untouched."""
+    from expense_agent_svc.budgets import BudgetExceeded, BudgetGuard
+    from expense_agent_svc.dependencies import (
+        AgentDependencies,
+        RequestContext,
+        register_request,
+        release_request,
+    )
+    from expense_agent_svc.nodes.retrieval import retrieval_body_for_tests
+    from expense_agent_svc.settings import Settings
+
+    invocations: list[tuple[str, str]] = []
+
+    def _retrieve(q: str, t: str) -> dict[str, object]:
+        invocations.append((q, t))
+        return {"answer": "", "citations": []}
+
+    async def _rewriter_with_usage(question: str) -> tuple[str, int]:
+        del question
+        return "ok", 0
+
+    class _StubClient:
+        @property
+        def messages(self) -> object:
+            return object()
+
+    class _FakeMCPSession:
+        async def list_tools(self, cursor: str | None = None) -> object:
+            return object()
+
+        async def call_tool(
+            self,
+            name: str,
+            arguments: dict[str, object] | None = None,
+        ) -> object:
+            return object()
+
+    # Pre-exhaust the budget.
+    exhausted = BudgetGuard(ceiling_usd_e5=100)
+    with pytest.raises(BudgetExceeded):
+        exhausted.add_cost(100)
+
+    deps = AgentDependencies(
+        settings=Settings(),
+        mcp_session=cast(Any, _FakeMCPSession()),
+        anthropic=_StubClient(),
+        instructor=_StubClient(),
+        retrieve=_retrieve,
+    )
+    ctx = RequestContext(thread_id="t", tenant_id="tenant-a", budget=exhausted)
+    register_request(ctx)
+    try:
+        result = await retrieval_body_for_tests(
+            {
+                "question": "policy?",
+                "tenant_id": "tenant-a",
+                "thread_id": "t",
+                "request_id": ctx.request_id,
+            },
+            dependencies=deps,
+            rewriter_with_usage=_rewriter_with_usage,
+            to_thread=cast(Any, lambda fn, *a: fn(*a)),
+        )
+    finally:
+        release_request(ctx.request_id)
+
+    assert invocations == [], "W7D3 must not be invoked after budget exhaustion"
+    assert result["errors"] == ["budget_exceeded"]
+
+
+def test_runtime_wires_query_rewriter_into_retrieval_agent() -> None:
+    text = _runtime_source()
+    assert "make_query_rewriter(" in text
+    assert "rewriter_with_usage=rewriter_with_usage" in text

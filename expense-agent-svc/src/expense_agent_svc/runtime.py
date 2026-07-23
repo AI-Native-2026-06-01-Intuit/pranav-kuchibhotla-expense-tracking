@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
@@ -168,6 +168,82 @@ def make_anthropic_model_invoke(
         return response
 
     return invoke
+
+
+# --- Real query-rewrite adapter --------------------------------------------
+
+
+_REWRITE_SYSTEM = (
+    "You rewrite a user question into ONE short retrieval query. "
+    "Preserve every literal identifier verbatim: order ids (ord-*), "
+    "tenant ids (tenant-*), digits, amounts, and any merchant / order / "
+    "refund / policy keywords. Do NOT explain your reasoning. Do NOT "
+    "quote yourself. Output the query and nothing else."
+)
+_REWRITE_MAX_TOKENS = 128
+_REWRITE_MAX_CHARS = 400
+
+
+def _extract_rewrite_text(response: object) -> str:
+    """Pull the plain-text rewrite out of an Anthropic Message safely."""
+    content = getattr(response, "content", None) or []
+    for block in content:
+        if getattr(block, "type", None) == "text":
+            text = getattr(block, "text", None)
+            if isinstance(text, str):
+                return text
+    return ""
+
+
+def make_query_rewriter(
+    *,
+    retrieval_anthropic: object,
+    model_name: str,
+    input_rate_usd_e5_per_million: int,
+    output_rate_usd_e5_per_million: int,
+    max_tokens: int = _REWRITE_MAX_TOKENS,
+) -> Callable[[str], Awaitable[tuple[str, int]]]:
+    """Return the async ``(question) -> (rewrite, cost_usd_e5)`` rewriter.
+
+    The returned callable matches :class:`QueryRewriterWithUsage` in
+    ``nodes/retrieval.py``: the tuple carries the bounded rewrite
+    string plus the integer cost delta computed from the real
+    ``usage.input_tokens`` / ``.output_tokens`` on the raw Anthropic
+    response. Missing usage counts as zero cost — we never invent
+    token counts.
+
+    The retrieval-worker's ``X-Agent: retrieval_agent`` header lives on
+    ``retrieval_anthropic``; the wire header rides along on every call.
+    Chain-of-thought is not requested; the model is asked for exactly
+    one short retrieval query.
+
+    Empty / oversize outputs are the retrieval node's
+    :func:`_pick_rewrite` responsibility — it falls back to the
+    original question when identifiers were dropped. Here we simply
+    return the raw string and let that filter run once.
+    """
+
+    async def _rewrite(question: str) -> tuple[str, int]:
+        response = await cast(Any, retrieval_anthropic).messages.create(
+            model=model_name,
+            max_tokens=max_tokens,
+            system=_REWRITE_SYSTEM,
+            messages=[{"role": "user", "content": question}],
+        )
+        text = _extract_rewrite_text(response)[:_REWRITE_MAX_CHARS]
+
+        usage = getattr(response, "usage", None)
+        if usage is None:
+            return text, 0
+        input_tokens = int(getattr(usage, "input_tokens", 0) or 0)
+        output_tokens = int(getattr(usage, "output_tokens", 0) or 0)
+        cost = (
+            input_tokens * input_rate_usd_e5_per_million // 1_000_000
+            + output_tokens * output_rate_usd_e5_per_million // 1_000_000
+        )
+        return text, cost
+
+    return _rewrite
 
 
 # --- Real retrieval adapter -------------------------------------------------
@@ -350,13 +426,27 @@ async def _default_runtime_context(
             retrieve=retrieve,
         )
 
-        # --- 8. Compile the graph over the live saver ------------------
+        # --- 8. Query rewriter for the retrieval agent -----------------
+        # The rewriter uses the *async* retrieval Anthropic client so
+        # it does not block the event loop. The W7D3 inner generation
+        # keeps using the sync retrieval client above.
+        rewriter_with_usage = make_query_rewriter(
+            retrieval_anthropic=retrieval_client,
+            model_name=settings.model_name,
+            input_rate_usd_e5_per_million=settings.input_rate_usd_e5_per_million,
+            output_rate_usd_e5_per_million=settings.output_rate_usd_e5_per_million,
+        )
+
+        # --- 9. Compile the graph over the live saver ------------------
         api_model_invoke = make_anthropic_model_invoke(
             api_client=api_client,
             model_name=settings.model_name,
         )
         node_set = NodeSet(
-            retrieval_agent=make_retrieval_agent(dependencies),
+            retrieval_agent=make_retrieval_agent(
+                dependencies,
+                rewriter_with_usage=rewriter_with_usage,
+            ),
             api_agent=make_api_agent(
                 dependencies,
                 model_invoke=api_model_invoke,
@@ -395,5 +485,6 @@ __all__ = [
     "anthropic_default_headers",
     "default_runtime_factory",
     "make_anthropic_model_invoke",
+    "make_query_rewriter",
     "make_retrieval_callable",
 ]
