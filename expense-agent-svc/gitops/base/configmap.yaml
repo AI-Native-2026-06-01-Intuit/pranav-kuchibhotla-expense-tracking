@@ -1,0 +1,38 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: expense-agent-svc-config
+  labels:
+    app.kubernetes.io/name: expense-agent-svc
+    app.kubernetes.io/part-of: expense
+    app.kubernetes.io/managed-by: argocd
+data:
+  # Non-secret runtime knobs only. Every EXPENSE_AGENT_* env var that
+  # carries a secret goes through the Secret manifest instead. The
+  # settings module reads these keys directly (see
+  # expense_agent_svc/settings.py).
+  EXPENSE_AGENT_HOST: "0.0.0.0"
+  EXPENSE_AGENT_PORT: "8080"
+  EXPENSE_AGENT_ENVIRONMENT: "prod"
+  EXPENSE_AGENT_MODEL_NAME: "claude-sonnet-4-5"
+  EXPENSE_AGENT_RERANKER: "bge-reranker-base"
+
+  # W7D5 guardrails — integer money + 25-recursion ceiling.
+  EXPENSE_AGENT_REQUEST_BUDGET_USD_E5: "25000"
+  EXPENSE_AGENT_RECURSION_LIMIT: "25"
+  EXPENSE_AGENT_RETRIEVAL_DEADLINE_S: "3.0"
+  EXPENSE_AGENT_API_DEADLINE_S: "5.0"
+  EXPENSE_AGENT_SYNTHESIS_DEADLINE_S: "8.0"
+
+  # Local token-price rates in integer 1e-5 USD per million tokens.
+  # Authoritative billing lives in llm-proxy / CloudWatch; these feed
+  # BudgetGuard's per-request ceiling only.
+  EXPENSE_AGENT_INPUT_RATE_USD_E5_PER_MILLION: "300"
+  EXPENSE_AGENT_OUTPUT_RATE_USD_E5_PER_MILLION: "1500"
+
+  # RAGAS production sampling defaults to 1% — kept low so a traffic
+  # spike does not multiply evaluator LLM cost.
+  EXPENSE_AGENT_RAGAS_SAMPLE_RATE: "0.01"
+
+  # LangSmith project label — the API key comes in via the Secret.
+  EXPENSE_AGENT_LANGSMITH_PROJECT: "expense-agent-svc-prod"

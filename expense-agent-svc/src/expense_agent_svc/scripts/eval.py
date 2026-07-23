@@ -302,8 +302,7 @@ async def run_external(
         return ExternalResult(
             status="credentials_missing",
             reason=(
-                f"external RAGAS requires {_ANTHROPIC_KEY_ENV} "
-                f"(no {_ALLOW_SKIP_ENV} flag was set)"
+                f"external RAGAS requires {_ANTHROPIC_KEY_ENV} (no {_ALLOW_SKIP_ENV} flag was set)"
             ),
         )
     if evaluator is None:

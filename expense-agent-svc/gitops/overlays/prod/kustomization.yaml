@@ -1,0 +1,39 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: expense-svc
+
+resources:
+  - ../../base
+
+labels:
+  - includeSelectors: false
+    includeTemplates: true
+    pairs:
+      app.kubernetes.io/instance: expense-agent-svc-prod
+      env: prod
+
+replicas:
+  - name: expense-agent-svc
+    count: 3
+
+images:
+  # The merge-to-main workflow rewrites the digest below via
+  # `kustomize edit set image` (see scripts/bump_config_image.py).
+  # The initial value is a 40-hex sentinel so a `kubectl apply
+  # --dry-run` never accepts a floating tag: any diff-free reconcile
+  # will replace this line before hitting the cluster.
+  - name: 726695008378.dkr.ecr.us-east-1.amazonaws.com/expense-agent-svc
+    newTag: "0000000000000000000000000000000000000000"
+
+patches:
+  - target:
+      kind: ConfigMap
+      name: expense-agent-svc-config
+    patch: |-
+      - op: replace
+        path: /data/EXPENSE_AGENT_ENVIRONMENT
+        value: prod
+      - op: replace
+        path: /data/EXPENSE_AGENT_LANGSMITH_PROJECT
+        value: expense-agent-svc-prod

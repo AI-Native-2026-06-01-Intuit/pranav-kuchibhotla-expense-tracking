@@ -39,6 +39,7 @@ dev = [
     "ruff>=0.5",
     "respx>=0.21",
     "testcontainers[postgres]>=4.7",
+    "types-pyyaml>=6.0.12.20260518",
 ]
 
 [tool.uv.sources]
@@ -103,6 +104,7 @@ select = ["E", "F", "UP", "B", "SIM", "I", "RUF", "T20"]
 
 [tool.ruff.lint.per-file-ignores]
 "src/expense_agent_svc/scripts/*" = ["T20"]
+"scripts/*" = ["T20"]
 
 [tool.pytest.ini_options]
 minversion = "8.0"
