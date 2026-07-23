@@ -1,0 +1,194 @@
+"""Runtime dependency and per-request context surfaces.
+
+Everything that is *not* JSON-serializable — MCP sessions, Anthropic
+clients, Postgres pools, per-request ``BudgetGuard`` objects — lives in
+this module and is passed to nodes at invocation time. Nothing here ever
+enters :class:`~expense_agent_svc.state.AgentState`, so the
+:class:`~langgraph.checkpoint.postgres.PostgresSaver` only ever writes
+serializable data.
+
+The LangGraph 1.2 API exposes ``context_schema`` on ``StateGraph`` and a
+matching ``Runtime`` object at node time; that is the long-term
+integration point for :class:`AgentDependencies`. However, ``Runtime``
+requires the context to be a dataclass / TypedDict — it cannot carry an
+open MCP ``ClientSession``. So the actual injection lives in a small
+concurrency-safe registry keyed by a per-request id (the request stashes
+a placeholder id in ``AgentState`` and nodes pull the live dependencies
+back through :func:`get_request_context`). This keeps the graph state
+serializable while still giving nodes typed access to their
+collaborators.
+"""
+
+from __future__ import annotations
+
+import threading
+import uuid
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Protocol
+
+if TYPE_CHECKING:
+    from .settings import Settings
+
+
+class BudgetGuardLike(Protocol):
+    """Structural type covering the :class:`BudgetGuard` surface nodes call.
+
+    The concrete implementation lives in :mod:`expense_agent_svc.budgets`
+    (Phase 6). Using a Protocol here keeps this module import-cycle free
+    and lets tests inject a fake without pulling in the real ceiling
+    arithmetic.
+    """
+
+    spent_usd_e5: int
+    ceiling_usd_e5: int
+
+    def check_or_raise(self) -> None: ...
+
+    def add_cost(self, cost_usd_e5: int) -> None: ...
+
+
+class MCPSessionLike(Protocol):
+    """Structural type for the subset of ``mcp.ClientSession`` we use.
+
+    Kept as a Protocol so unit tests can drive the API and synthesis nodes
+    with in-memory fakes and never touch the network transport.
+    """
+
+    async def list_tools(self, cursor: str | None = ...) -> object: ...
+
+    async def call_tool(
+        self,
+        name: str,
+        arguments: dict[str, object] | None = ...,
+    ) -> object: ...
+
+
+class AnthropicClientLike(Protocol):
+    """Structural type for the injected Anthropic client used by the API node."""
+
+    @property
+    def messages(self) -> object: ...
+
+
+class InstructorClientLike(Protocol):
+    """Structural type for the injected Instructor client used by synthesis."""
+
+    @property
+    def messages(self) -> object: ...
+
+
+class RetrievalCallable(Protocol):
+    """Callable contract satisfied by :func:`expense_ai.rag.retrieve_and_generate`.
+
+    Kept as a Protocol so the retrieval node can be exercised with a
+    deterministic fake and never has to spin up pgvector + Redis.
+    """
+
+    def __call__(
+        self,
+        query_text: str,
+        tenant_id: str,
+        /,
+    ) -> dict[str, object]: ...
+
+
+@dataclass(frozen=True)
+class AgentDependencies:
+    """Long-lived, process-scoped dependencies shared across requests.
+
+    The FastAPI lifespan constructs this exactly once. Nodes read
+    ``settings`` and use ``mcp_session`` / ``anthropic`` / ``instructor``
+    / ``retrieve`` through their Protocol interfaces. Nothing in here is
+    ever checkpointed.
+    """
+
+    settings: Settings
+    mcp_session: MCPSessionLike
+    anthropic: AnthropicClientLike
+    instructor: InstructorClientLike
+    retrieve: RetrievalCallable
+
+
+@dataclass
+class RequestContext:
+    """Per-request runtime context.
+
+    Each incoming ``/v1/chat/stream`` request builds a fresh
+    :class:`RequestContext` with its own :class:`BudgetGuard`; sharing
+    one across requests would let one tenant's spend deny another. The
+    thread/tenant identifiers echo the values also stored in
+    :class:`AgentState`, but they are duplicated here so nodes never
+    have to reach back into the checkpointed state to find their
+    request identity.
+    """
+
+    thread_id: str
+    tenant_id: str
+    budget: BudgetGuardLike
+    # An opaque id we hand to nodes through the state so they can find
+    # this context in the registry. Nodes never see the underlying
+    # dependencies dict directly.
+    request_id: str = field(default_factory=lambda: str(uuid.uuid4()))
+
+
+class _RequestRegistry:
+    """Thread-safe map from request id to :class:`RequestContext`.
+
+    Node code fetches its per-request context through this registry.
+    A module-global ``dict`` alone would race under concurrent requests;
+    a lock keeps the register/unregister edges safe without pinning a
+    ``BudgetGuard`` to a single event loop.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._by_id: dict[str, RequestContext] = {}
+
+    def register(self, ctx: RequestContext) -> None:
+        with self._lock:
+            if ctx.request_id in self._by_id:
+                raise KeyError(f"request_id {ctx.request_id!r} already registered")
+            self._by_id[ctx.request_id] = ctx
+
+    def get(self, request_id: str) -> RequestContext:
+        with self._lock:
+            ctx = self._by_id.get(request_id)
+        if ctx is None:
+            raise KeyError(f"unknown request_id {request_id!r}")
+        return ctx
+
+    def release(self, request_id: str) -> None:
+        with self._lock:
+            self._by_id.pop(request_id, None)
+
+    def size(self) -> int:
+        with self._lock:
+            return len(self._by_id)
+
+
+_REGISTRY = _RequestRegistry()
+
+
+def register_request(ctx: RequestContext) -> None:
+    """Register a per-request context so nodes can look it up."""
+    _REGISTRY.register(ctx)
+
+
+def get_request_context(request_id: str) -> RequestContext:
+    """Return the per-request context for the given id.
+
+    Raises ``KeyError`` if the request was never registered or has
+    already been released — either is a programming error and should
+    never happen on the happy path.
+    """
+    return _REGISTRY.get(request_id)
+
+
+def release_request(request_id: str) -> None:
+    """Release the per-request context (idempotent)."""
+    _REGISTRY.release(request_id)
+
+
+def _registry_size_for_tests() -> int:
+    """Test helper — the registry itself is intentionally not exported."""
+    return _REGISTRY.size()
