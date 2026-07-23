@@ -426,3 +426,179 @@ Deviations we considered but rejected:
   audience is missing, and `tests/test_sse_auth.py` exercises the
   reject paths with locally-generated RSA key pairs (no committed
   private key material). Evidence file updated accordingly.
+
+## What W7D5 adds
+
+W7D5 introduces a new sibling project, **`expense-agent-svc/`** — a
+FastAPI + LangGraph 1.2 multi-agent orchestrator that consumes both
+the W7D3 hybrid RAG (this package) and the W7D4 MCP surface.
+`expense-ai` remains the source of truth for retrieval; W7D5 wraps it
+in a thin adapter and orchestrates it alongside API and synthesis
+workers.
+
+The additions across the tree:
+
+- **Three-node LangGraph supervisor** — `retrieval_agent`,
+  `api_agent`, `synthesis_agent` in
+  `expense-agent-svc/src/expense_agent_svc/nodes/`.
+- **Supervisor parallel routing** — a `list[Send]` fan-out lets both
+  workers run in the same super-step when a question spans policy +
+  API; the reducers on `docs` (`operator.add`) and `tool_results`
+  (custom merger) preserve both branches, and `synthesis_agent`
+  executes exactly once at the fan-in join.
+- **`AsyncPostgresSaver` checkpointer** owned by the FastAPI lifespan
+  through an `AsyncExitStack`, matching the installed
+  `langgraph-checkpoint-postgres 3.1.0` async-context-manager
+  contract. Live restart/resume is proven by
+  `tests/test_checkpointer_resume.py`.
+- **Runtime recursion limit** — LangGraph 1.2 rejects
+  `recursion_limit` on `compile()`; the value (25) lives on the
+  invocation `configurable`. One central `invocation_config(thread_id)`
+  helper is grep-enforced by an AST-based test walking every
+  `.invoke/.ainvoke/.astream_events` call site in `src/`.
+- **Per-request `BudgetGuard`** with a 25 000 `cost_usd_e5` ceiling.
+  Money is integer only (per this codebase's rule); float/bool cost
+  is rejected. Each `POST /v1/chat/stream` constructs its own guard,
+  registered in the `RequestContext` registry — two concurrent
+  requests never share one.
+- **Per-node deadlines** — 3 s retrieval, 5 s API, 8 s synthesis.
+  Each node is wrapped in an `asyncio.wait_for`-based decorator that
+  returns a fresh sentinel copy on timeout and tags `deadline_exceeded`
+  on the current LangSmith run.
+- **W7D3 retrieval adapter** — `expense-agent-svc/src/expense_agent_svc/
+  runtime.py::make_retrieval_callable` grabs one connection per call
+  from a `psycopg_pool.ConnectionPool` opened against
+  `EXPENSE_AGENT_RAG_POSTGRES_URL` (the pgvector store, distinct from
+  the checkpointer DSN), passes it plus a Redis client and a
+  synchronous retrieval-worker Anthropic client into
+  `expense_ai.rag.retrieve_and_generate`. No W7D3 code changed.
+- **W7D4 MCP dynamic discovery** — `nodes/api.py` calls
+  `session.list_tools()` at runtime and translates the discovered
+  `inputSchema` into the Anthropic tool-use shape. No hardcoded
+  four-tool catalogue.
+- **Deterministic UUID v5 refund idempotency** — `deterministic_
+  idempotency_key(thread_id, tool_name, args)` seeds `uuid.uuid5`
+  from a canonical args hash. Replay across checkpoint resume
+  produces the same key, and the upstream ledger deduplicates.
+  W7D4's `CreateRefundArgs.idempotency_key` was relaxed from
+  UUID-v4-only to accept v4 (interactive) or v5 (agent-deterministic)
+  in `feat(mcp): accept deterministic UUID5 idempotency keys`.
+- **Instructor `FinalAnswer`** — `nodes/synthesis.py` uses
+  `AsyncInstructor.messages.create_with_completion` (installed
+  Instructor 1.15.4) with `response_model=FinalAnswer`,
+  `max_retries=2`. The raw completion's `usage.input_tokens` /
+  `output_tokens` feed real integer cost into `BudgetGuard.record_usage`
+  at the configured per-M rates. Empty-context refusal short-circuits
+  before the model call and returns `confidence < 0.4, citations=[]`.
+- **AI SDK v4 stream bridge** — `sse.py` bridges
+  `graph.astream_events(version="v2")` to the AI SDK v4 data-stream
+  wire (`0:`, `2:`, `3:`) consumed by the new `AgentChatPanel` in
+  `expense-web`. Channel 2 wraps `FinalAnswer` in a JSON array
+  (`useChat.data`), channel 3 emits the safe slug (`useChat.error`).
+  Exception reprs / DSNs / JWTs never appear on the wire.
+- **Production RAGAS sampler** — `sampling.py::ProductionSampler`
+  schedules 1 % (default) of grounded answers for background
+  faithfulness/context recall/answer relevancy evaluation. Non-
+  blocking (owns its `asyncio.Task` set, drained by `aclose()`),
+  writes stable metadata (`ragas_faithfulness`, `ragas_context_recall`,
+  `ragas_answer_relevancy`, `ragas_sampled=true`) via an injectable
+  writer. Never fabricates a metric.
+- **20-row trajectory gate** — `expense-agent-svc/evals/scenarios.jsonl`
+  contains exactly 20 committed scenarios spanning docs-only,
+  API-only, both, unknown-default and refusal across tenant-a/b/c.
+  `scripts/eval.py --gate` walks them through deterministic fake
+  nodes and asserts trajectory ≥ 0.70, answer ≥ 0.70, cost
+  regression ≤ 15 % against a baseline labelled
+  `"source": "deterministic_fixture"`. `--external` adds RAGAS
+  faithfulness ≥ 0.85; missing key fails loudly in CI; local skip
+  reports `status="skipped", faithfulness=null` — never a fabricated
+  score.
+- **Deployment shape** — repo-root Docker build with a non-root uid
+  65532 image, `HEALTHCHECK` on `/healthz`; GitOps
+  `expense-agent-svc/gitops/{base,overlays/prod}` matching the
+  sibling `expense-api` conventions; Argo Application pointing at
+  the actual config-repo remote at
+  `expense-agent-svc/overlays/prod`; CloudFormation
+  `agent-svc-budget.yaml` provisioning a $4 000/month
+  `AWS::Budgets::Budget` + an `AWS::Budgets::BudgetsAction`
+  (`ApprovalModel=AUTOMATIC`, `ActionType=APPLY_IAM_POLICY`) that
+  attaches a DENY policy to `expense-agent-svc-role` at 100 % actual
+  usage.
+
+### Concrete AI-output deviations
+
+Real deviations recorded during the eight-batch W7D5 implementation
+(one commit each with more detail in
+`expense-agent-svc/PROMPT_JOURNAL.md`):
+
+1. **Rejected bare `docs`/`tool_results` state slots.** The lesson
+   snippet drafted `docs: list[dict]` and `tool_results: dict` with
+   no reducer. Two Sends to the same key in one super-step silently
+   clobber. Replaced with `Annotated[…, operator.add]` and a custom
+   `_merge_tool_results` reducer that preserves both parallel branches.
+   Safety: fan-out data integrity is now a compile-time property.
+2. **Rejected clients and `BudgetGuard` in `AgentState`.** The lesson
+   snippet stored the MCP session and the Anthropic client on the
+   state. Replaced with `dependencies.AgentDependencies` (process-scoped)
+   + a `RequestContext` registry keyed by an opaque `request_id`;
+   only serialisable scalars enter `AgentState`. Safety:
+   `AsyncPostgresSaver` cannot accidentally serialise a Postgres
+   connection, and two concurrent requests cannot share a
+   `BudgetGuard`.
+3. **Corrected `recursion_limit` from compile-time to invocation-time.**
+   LangGraph 1.2.9's `StateGraph.compile()` no longer accepts the
+   keyword. The single `invocation_config(thread_id)` helper carries
+   `recursion_limit=25` on every graph invocation. An AST-based test
+   walks `src/` and refuses any call site that omits it. Safety:
+   the 25-step ceiling cannot be silently missing.
+4. **Corrected `PostgresSaver` lifecycle to remain inside an async
+   context manager.** The lesson snippet stored the saver as a
+   long-lived attribute; installed `langgraph-checkpoint-postgres
+   3.1.0` provides an `@asynccontextmanager` whose connection dies
+   with the context. The FastAPI lifespan enters it inside an
+   `AsyncExitStack` and compiles the graph *inside* that block.
+   Safety: the checkpointer's Postgres connection is always closed
+   on process shutdown.
+5. **Rejected unsupported `MCP call_tool(headers=…)`.** The lesson
+   snippet passed the idempotency key as an HTTP header via a
+   `headers=` kwarg on `ClientSession.call_tool`. Installed
+   `mcp 1.28.1` has no such parameter. The UUID5 goes into the tool
+   `arguments` dict; the W7D4 server's `create_refund` tool already
+   forwards it as the upstream HTTP `Idempotency-Key` header. Safety:
+   the code compiles against the real MCP client, not a lesson artefact.
+6. **Relaxed W7D4 UUID validation from v4-only to v4/v5.** The W7D4
+   server rejected UUID v5, which the W7D5 deterministic idempotency
+   contract requires. Rather than reshape the key into a v4-lookalike
+   (which would leak the determinism into a v4 slot), we relaxed the
+   accepted set to `{v4, v5}` — v1/v2/v3 still rejected. Safety: the
+   two contracts are honestly compatible instead of paved-over.
+7. **Rejected free-text synthesis.** The lesson snippet parsed
+   citations back out of free-form model output with a regex.
+   Replaced with Instructor `FinalAnswer` (`extra="forbid"`,
+   `Citation.quote` bounded 10..240 chars, `confidence` in [0, 1]).
+   Safety: an invented `doc_id` is a hard validation error, not a
+   silent leak into the response.
+8. **Rejected invented RAGAS values.** A missing evaluator key with
+   the local-skip flag reports `status="skipped",
+   faithfulness=null` — never a fabricated number.
+   `evals/last_run.json` carries `"faithfulness": null` and
+   `"source": "deterministic_fixture"`. CI never exports the local-
+   skip flag. Safety: a green gate is measured, not confabulated.
+9. **Corrected simple set-based trajectory matching to ordered
+   parallel semantics.** The lesson snippet used `set(actual) ==
+   set(expected)`, which would score a "synthesis first, then a
+   worker" sequence as 1.0. Replaced with ordered semantics: every
+   worker must appear before the terminal `synthesis_agent`; both
+   workers on the both-branch may swap; a duplicate synthesis or a
+   foreign node fails. Safety: supervisor regressions cannot pass
+   the gate.
+10. **Rejected direct deployment claims.** The lesson snippet's
+    final report contained a "deployed and Synced/Healthy" block.
+    Actual state: no `argocd login`, no `argocd app create`, no ECR
+    repo, no image push, no CFN stack, no GitHub Actions run. The
+    runbook's rollback rehearsal is `PENDING` with every field
+    named; the evidence doc's checklist keeps those items
+    unchecked. Safety: the audit trail matches reality.
+
+Each deviation has a corresponding assertion in `expense-agent-svc/tests/`
+so future edits that regress the choice fail loudly.

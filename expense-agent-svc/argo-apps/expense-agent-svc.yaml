@@ -1,0 +1,69 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: expense-agent-svc
+  namespace: argocd
+  # Finalizer matches the sibling expense-api-dev Application in the
+  # config repo — prune-on-delete keeps the cluster from carrying dead
+  # workloads if this Application is removed from the config repo.
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+  labels:
+    team: expense
+    env: prod
+    app.kubernetes.io/part-of: expense
+    app.kubernetes.io/name: expense-agent-svc
+    app.kubernetes.io/managed-by: argocd
+spec:
+  # Uses the existing "expense" AppProject from the config repo. That
+  # project already lists the three expense-* namespaces on
+  # kubernetes.default.svc in its destinations, but currently only
+  # includes expense-dev/staging/prod. Bringing expense-svc under
+  # this project requires the operator to extend the AppProject
+  # destinations block; this Application will fail Argo sync with a
+  # "does not match any of the allowed destinations" error until
+  # that operator step lands. Documented in the runbook (Phase 21).
+  project: expense
+  source:
+    # The actual config-repository URL as observed at
+    # ~/Documents/pranav-kuchibhotla-expense-config remote origin.
+    repoURL: https://github.com/AI-Native-2026-06-01-Intuit/pranav-kuchibhotla-expense-config.git
+    # The config repo's expense-api Application targets `main`; we
+    # follow the same convention. The Argo deploy branch has not been
+    # renamed in the config repo, and the sibling Application example
+    # (argocd/applications/expense-api-dev.yaml) uses targetRevision:
+    # main.
+    targetRevision: main
+    # The source path below does not currently exist in the config
+    # repository — the merge-to-main workflow bootstraps it from the
+    # committed template at expense-agent-svc/gitops/overlays/prod
+    # via scripts/bump_config_image.py. Do NOT hand-apply this
+    # Application before the config-repo path is populated; the
+    # deployment tests assert this path is documented in-code and
+    # never claimed to exist yet.
+    path: expense-agent-svc/overlays/prod
+  destination:
+    # In-cluster API server. The config repo's AppProject already
+    # allow-lists this server for the expense project.
+    server: https://kubernetes.default.svc
+    # Assignment requires namespace expense-svc (distinct from the
+    # existing expense-{dev,staging,prod} spring-api namespaces).
+    namespace: expense-svc
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+  ignoreDifferences:
+    # The placeholder Secret carries empty stringData in the committed
+    # template — the real values are seeded out of band. Excluding
+    # /data and /stringData mirrors the sibling expense-api pattern so
+    # self-heal does not clobber seeded credentials each reconcile.
+    - group: ""
+      kind: Secret
+      name: expense-agent-svc-secrets
+      jsonPointers:
+        - /data
+        - /stringData

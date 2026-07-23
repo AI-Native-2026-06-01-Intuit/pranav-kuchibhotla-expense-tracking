@@ -1,0 +1,219 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  W7D5 expense-agent-svc monthly $4000 cost cap + AUTOMATIC
+  BudgetsAction that attaches a DENY IAM policy to the pod role at
+  100% actual, freezing LLM traffic until an operator investigates.
+
+Parameters:
+  ServiceTagValue:
+    Type: String
+    Default: expense-agent-svc
+    Description: Value written to the "service" cost-allocation tag on this budget.
+
+  MonthlyLimitUsd:
+    Type: Number
+    Default: 4000
+    MinValue: 100
+    Description: Monthly cap (USD) for the expense-agent-svc BudgetType=COST budget.
+
+  BudgetName:
+    Type: String
+    Default: expense-agent-svc-monthly
+    Description: BudgetName for the AWS::Budgets::Budget resource.
+
+  ServiceRoleName:
+    Type: String
+    Default: expense-agent-svc-role
+    Description: >
+      IAM role attached to the expense-agent-svc pod identity. The
+      BudgetsAction attaches DenyPolicyArn to this role when the
+      monthly actual breaches the 100% threshold.
+
+  DenyPolicyArn:
+    Type: String
+    Default: ""
+    Description: >
+      ARN of a customer-managed IAM policy that denies the Anthropic /
+      Bedrock / Secrets read path used by the agent. Empty by default
+      so the template does not silently attach a placeholder policy —
+      the operator must supply the actual policy ARN before
+      create-stack. Static validation still passes; a missing value
+      will raise a CFN validation error at deploy time, which is the
+      intended fail-closed behavior.
+
+  BudgetActionExecutionRoleArn:
+    Type: String
+    Default: ""
+    Description: >
+      Optional pre-existing IAM role that AWS Budgets assumes to
+      execute the BudgetsAction. When empty the template creates a
+      minimally-scoped role inline (default). Supply an ARN only if
+      your platform team requires action execution via a centrally
+      managed role.
+
+  NotificationEmail:
+    Type: String
+    Default: ""
+    Description: >
+      Optional pre-breach notification email. Left blank on purpose so
+      the template validates without a hardcoded operator address;
+      supply this parameter at deploy time to receive warnings.
+
+Conditions:
+  CreateInlineExecutionRole:
+    !Equals [!Ref BudgetActionExecutionRoleArn, ""]
+  NotifyByEmail:
+    !Not [!Equals [!Ref NotificationEmail, ""]]
+
+Resources:
+  # SNS topic that fans the 80% forecast warning out to email. Aligns
+  # with the sibling cost stack's KMS-managed pattern.
+  BudgetNotificationTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: "expense-agent-svc-budget-alerts"
+      DisplayName: expense-agent-svc-budget
+      KmsMasterKeyId: alias/aws/sns
+      Tags:
+        - Key: service
+          Value: !Ref ServiceTagValue
+        - Key: managed-by
+          Value: cloudformation
+
+  BudgetTopicPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      Topics:
+        - !Ref BudgetNotificationTopic
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowBudgetsToPublish
+            Effect: Allow
+            Principal:
+              Service: budgets.amazonaws.com
+            Action: sns:Publish
+            Resource: !Ref BudgetNotificationTopic
+            Condition:
+              StringEquals:
+                AWS:SourceAccount: !Ref AWS::AccountId
+
+  # The action-execution role Budgets assumes to attach the DENY
+  # policy to ServiceRoleName. Only created when the caller did NOT
+  # supply a pre-existing BudgetActionExecutionRoleArn.
+  BudgetActionExecutionRole:
+    Type: AWS::IAM::Role
+    Condition: CreateInlineExecutionRole
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-budgets-action-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: budgets.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+      Policies:
+        - PolicyName: attach-detach-deny-on-agent-role
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - iam:AttachRolePolicy
+                  - iam:DetachRolePolicy
+                Resource: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${ServiceRoleName}"
+                Condition:
+                  ArnEquals:
+                    iam:PolicyARN: !Ref DenyPolicyArn
+      Tags:
+        - Key: service
+          Value: !Ref ServiceTagValue
+        - Key: managed-by
+          Value: cloudformation
+
+  # Monthly cost budget for the expense-agent-svc slice, filtered by
+  # the service cost-allocation tag.
+  MonthlyBudget:
+    Type: AWS::Budgets::Budget
+    Properties:
+      Budget:
+        BudgetName: !Ref BudgetName
+        BudgetType: COST
+        TimeUnit: MONTHLY
+        BudgetLimit:
+          Amount: !Ref MonthlyLimitUsd
+          Unit: USD
+        CostFilters:
+          TagKeyValue:
+            - !Join ["$", ["user:service", !Ref ServiceTagValue]]
+      NotificationsWithSubscribers:
+        - !If
+          - NotifyByEmail
+          - Notification:
+              NotificationType: FORECASTED
+              ComparisonOperator: GREATER_THAN
+              Threshold: 80
+              ThresholdType: PERCENTAGE
+            Subscribers:
+              - SubscriptionType: SNS
+                Address: !Ref BudgetNotificationTopic
+              - SubscriptionType: EMAIL
+                Address: !Ref NotificationEmail
+          - Notification:
+              NotificationType: FORECASTED
+              ComparisonOperator: GREATER_THAN
+              Threshold: 80
+              ThresholdType: PERCENTAGE
+            Subscribers:
+              - SubscriptionType: SNS
+                Address: !Ref BudgetNotificationTopic
+
+  # BudgetsAction: at 100% actual usage, attach the DENY policy to the
+  # expense-agent-svc pod role, automatically. Manual sync is out of
+  # scope here — the rubric requires ApprovalModel=AUTOMATIC.
+  HardCapDenyAction:
+    Type: AWS::Budgets::BudgetsAction
+    Properties:
+      BudgetName: !Ref BudgetName
+      NotificationType: ACTUAL
+      ActionThreshold:
+        Value: 100
+        Type: PERCENTAGE
+      ActionType: APPLY_IAM_POLICY
+      ApprovalModel: AUTOMATIC
+      ExecutionRoleArn: !If
+        - CreateInlineExecutionRole
+        - !GetAtt BudgetActionExecutionRole.Arn
+        - !Ref BudgetActionExecutionRoleArn
+      Definition:
+        IamActionDefinition:
+          PolicyArn: !Ref DenyPolicyArn
+          Roles:
+            - !Ref ServiceRoleName
+      Subscribers:
+        # AWS::Budgets::BudgetsAction uses Type (not SubscriptionType,
+        # which is the AWS::Budgets::Budget subscriber shape).
+        - Type: SNS
+          Address: !Ref BudgetNotificationTopic
+    DependsOn: MonthlyBudget
+
+Outputs:
+  BudgetName:
+    Description: Monthly cost budget name for expense-agent-svc.
+    Value: !Ref BudgetName
+    Export:
+      Name: !Sub "${AWS::StackName}-BudgetName"
+  BudgetTopicArn:
+    Description: SNS topic ARN receiving budget forecast warnings.
+    Value: !Ref BudgetNotificationTopic
+    Export:
+      Name: !Sub "${AWS::StackName}-BudgetTopicArn"
+  ServiceRoleTarget:
+    Description: IAM role the BudgetsAction attaches the deny policy to at 100% actual.
+    Value: !Ref ServiceRoleName
+    Export:
+      Name: !Sub "${AWS::StackName}-ServiceRoleTarget"

@@ -67,6 +67,12 @@ class CreateRefundArgs(_Strict):
     amount: Decimal
     reason: Annotated[str, Field(min_length=4, max_length=200)]
     tenant_id: TenantId
+    # Accept UUID v4 (interactive callers minting a fresh random key) OR
+    # UUID v5 (W7D5 expense-agent-svc deriving a deterministic key from
+    # thread_id + tool_name + canonical args hash so a checkpoint replay
+    # produces the same key and the upstream ledger deduplicates the
+    # retry). Any other UUID version is rejected: v1 leaks the MAC, v2
+    # is not portable, v3 is the MD5 twin of v5 and buys nothing extra.
     idempotency_key: UUID
 
     @field_validator("tenant_id")
@@ -88,9 +94,9 @@ class CreateRefundArgs(_Strict):
 
     @field_validator("idempotency_key")
     @classmethod
-    def _v4(cls, v: UUID) -> UUID:
-        if v.version != 4:
-            raise ValueError("idempotency_key must be a UUID v4")
+    def _accept_v4_or_v5(cls, v: UUID) -> UUID:
+        if v.version not in (4, 5):
+            raise ValueError("idempotency_key must be a UUID v4 or v5")
         return v
 
 

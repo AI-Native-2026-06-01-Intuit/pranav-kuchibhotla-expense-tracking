@@ -1,0 +1,66 @@
+# Dockerfile-specific ignore patterns for expense-agent-svc.
+# Docker BuildKit reads this file when building with
+# `docker build -f expense-agent-svc/Dockerfile .` from repo root.
+#
+# All paths are relative to the repository-root context, so the
+# entries below reach into every sibling project we might otherwise
+# accidentally copy in.
+
+# Version control + local dev
+.git
+.gitignore
+.gitattributes
+
+# Node / TypeScript builds (expense-web is not needed inside the agent image)
+expense-web
+**/node_modules
+**/dist
+**/build
+**/coverage
+**/.next
+**/.turbo
+
+# Java (expense-api is not needed inside the agent image)
+expense-api
+
+# Python caches / venvs
+# Explicit + glob patterns — the top-level `.venv` alone was not
+# always caught by `**/.venv` in some BuildKit versions.
+.venv
+expense-ai/.venv
+expense-mcp-server/.venv
+expense-agent-svc/.venv
+**/.venv
+**/venv
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+**/.coverage
+**/htmlcov
+**/coverage.xml
+**/.tox
+
+# Local environment / secrets — must never enter the image.
+**/.env
+**/.env.*
+!**/.env.example
+**/*.pem
+**/*.key
+**/*.p12
+secrets/
+
+# Docs / editor noise
+# NOTE: hatchling reads the `readme` field of each pyproject.toml at
+# build time. expense-agent-svc / expense-mcp-server use README.md;
+# expense-ai uses PYTHON.md. Keep both classes.
+**/*.md
+!**/README.md
+!**/PYTHON.md
+**/.vscode
+**/.idea
+**/.DS_Store
+
+# Precomputed reports / evidence
+**/docs/evidence/**/*.log

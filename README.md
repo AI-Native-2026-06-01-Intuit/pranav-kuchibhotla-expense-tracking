@@ -235,3 +235,49 @@ Week 5 Day 5 observability workflow: `./scripts/observability-apply.sh` regenera
 ## Week 6 Day 1
 
 Week 6 Day 1 wires GitHub Actions CI/CD with AWS OIDC federation: `.github/workflows/ci.yml` runs `./gradlew build` on every PR to `main` and, on push to `main`, calls the reusable `.github/workflows/_build-and-push.yml` which builds the image, gates on a Trivy HIGH/CRITICAL scan, assumes `arn:aws:iam::726695008378:role/expense-api-build-push` via OIDC, and pushes SHA-tagged images to `uptimecrew/expense-api` in ECR. `.github/workflows/deploy-prod.yml` is `workflow_dispatch` with 40-hex `image-sha` validation, `environment: prod`, OIDC-assumed prod role, ECR image existence check, and `concurrency.cancel-in-progress: false`. All third-party actions in the W6D1 workflows are pinned to full 40-character SHAs; Dependabot proposes grouped weekly bumps. See [`expense-api/.github/PIPELINE.md`](./expense-api/.github/PIPELINE.md) for details, including the cohort waiver on required-reviewer environment protection.
+
+## Week 7 Day 5
+
+Week 7 Day 5 (capstone) delivers `expense-agent-svc/` — a FastAPI +
+LangGraph 1.2 supervisor over three worker nodes:
+
+- `retrieval_agent` — adapter over W7D3 hybrid RAG (`expense-ai`).
+- `api_agent` — dynamic MCP tool discovery + Anthropic tool-use loop
+  against the W7D4 SSE surface (`expense-mcp-server`), with
+  deterministic UUID v5 refund idempotency.
+- `synthesis_agent` — Instructor-typed `FinalAnswer` with a
+  deterministic empty-context refusal.
+
+Durable checkpoints via `AsyncPostgresSaver`. Runtime `recursion_limit`
+of 25 threaded through one central `invocation_config(thread_id)`
+helper (AST-checked). Per-request `BudgetGuard` (25 000 `cost_usd_e5`
+ceiling). Per-node deadlines (retrieval 3 s, API 5 s, synthesis 8 s).
+`POST /v1/chat/stream` emits AI SDK v4 data-stream frames (`0:` text
+delta, `2:` typed `FinalAnswer`, `3:` safe error slug) consumed by the
+new `AgentChatPanel` in `expense-web`. Production sampler in
+`sampling.py` schedules RAGAS evaluation on a bounded 1 % sample
+without blocking the user stream. 20 committed trajectory scenarios
+in `expense-agent-svc/evals/scenarios.jsonl` gate deterministic
+trajectory/answer/cost regression at CI time; `--external` adds
+faithfulness ≥ 0.85. Container image, GitOps manifests, Argo
+Application, and CloudFormation Budget + BudgetsAction template are
+statically valid but not deployed (see the runbook).
+
+Local validation:
+
+```
+cd expense-agent-svc
+uv sync --frozen
+uv run ruff check
+uv run mypy --strict src/ tests/ evals/
+EXPENSE_AGENT_TEST_POSTGRES_URL=postgresql://postgres:postgres@localhost:5432/postgres \
+  uv run pytest -v --cov=src --cov-fail-under=85
+uv run python -m expense_agent_svc.scripts.eval --gate
+```
+
+See:
+
+- [`expense-agent-svc/README.md`](./expense-agent-svc/README.md) — local dev + Docker + deployment prerequisites.
+- [`expense-agent-svc/RUNBOOK.md`](./expense-agent-svc/RUNBOOK.md) — on-call signals, troubleshooting, 30/60/90 plan, rollback rehearsal (Pending).
+- [`expense-agent-svc/PROMPT_JOURNAL.md`](./expense-agent-svc/PROMPT_JOURNAL.md) — real AI-driven decisions and rejections.
+- [`expense-agent-svc/docs/evidence/w7d5-static-validation.md`](./expense-agent-svc/docs/evidence/w7d5-static-validation.md) — final observed results and honest infrastructure gaps.
