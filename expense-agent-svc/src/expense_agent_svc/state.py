@@ -65,6 +65,11 @@ class AgentState(TypedDict, total=False):
     question: str
     tenant_id: str
     thread_id: str
+    # Opaque registry key that lets nodes fetch their per-request
+    # ``RequestContext`` (BudgetGuard etc.) without any non-serializable
+    # object entering the checkpointed state. See
+    # :mod:`expense_agent_svc.dependencies`.
+    request_id: str
 
     # --- Chat messages: LangGraph's canonical add_messages reducer ---
     messages: Annotated[list[BaseMessage], add_messages]
@@ -85,7 +90,13 @@ class AgentState(TypedDict, total=False):
     errors: Annotated[list[str], operator.add]
 
 
-def initial_state(*, question: str, tenant_id: str, thread_id: str) -> AgentState:
+def initial_state(
+    *,
+    question: str,
+    tenant_id: str,
+    thread_id: str,
+    request_id: str,
+) -> AgentState:
     """Return the minimal valid state for a new invocation.
 
     Consumers should build the invocation input through this helper so
@@ -97,6 +108,7 @@ def initial_state(*, question: str, tenant_id: str, thread_id: str) -> AgentStat
         question=question,
         tenant_id=tenant_id,
         thread_id=thread_id,
+        request_id=request_id,
         messages=[],
         docs=[],
         tool_results={},

@@ -86,10 +86,12 @@ def test_initial_state_shape() -> None:
         question="Which policy explains meal deductions?",
         tenant_id="tenant-a",
         thread_id="thread-1",
+        request_id="req-abc",
     )
     assert state["question"] == "Which policy explains meal deductions?"
     assert state["tenant_id"] == "tenant-a"
     assert state["thread_id"] == "thread-1"
+    assert state["request_id"] == "req-abc"
     assert state["docs"] == []
     assert state["tool_results"] == {}
     assert state["cost_usd_e5"] == 0

@@ -21,8 +21,8 @@ collaborators.
 
 from __future__ import annotations
 
+import secrets
 import threading
-import uuid
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Protocol
 
@@ -39,12 +39,24 @@ class BudgetGuardLike(Protocol):
     arithmetic.
     """
 
-    spent_usd_e5: int
-    ceiling_usd_e5: int
+    @property
+    def spent_usd_e5(self) -> int: ...
+
+    @property
+    def ceiling_usd_e5(self) -> int: ...
 
     def check_or_raise(self) -> None: ...
 
     def add_cost(self, cost_usd_e5: int) -> None: ...
+
+    def record_usage(
+        self,
+        *,
+        input_tokens: int,
+        output_tokens: int,
+        input_rate_usd_e5_per_million: int,
+        output_rate_usd_e5_per_million: int,
+    ) -> int: ...
 
 
 class MCPSessionLike(Protocol):
@@ -127,8 +139,11 @@ class RequestContext:
     budget: BudgetGuardLike
     # An opaque id we hand to nodes through the state so they can find
     # this context in the registry. Nodes never see the underlying
-    # dependencies dict directly.
-    request_id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    # dependencies dict directly. We use ``secrets.token_urlsafe`` (not
+    # ``uuid.uuid4``) intentionally: idempotency keys in this service
+    # are UUID v5 only, so keeping ``uuid4`` out of the whole package
+    # makes the "no UUID v4 as idempotency key" guardrail a pure grep.
+    request_id: str = field(default_factory=lambda: secrets.token_urlsafe(16))
 
 
 class _RequestRegistry:
