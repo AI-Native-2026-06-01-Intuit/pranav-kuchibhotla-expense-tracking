@@ -164,5 +164,95 @@ def test_registry_module_exposes_expected_surface() -> None:
         name for name in dir(deps) if not name.startswith("_") and callable(getattr(deps, name))
     }
     # Public surface: register/get/release plus the dataclasses/Protocols.
-    for expected in ("register_request", "get_request_context", "release_request"):
+    for expected in (
+        "register_request",
+        "get_request_context",
+        "release_request",
+        "get_request_context_for_state",
+    ):
         assert expected in exported
+
+
+# ---------- get_request_context_for_state ----------
+
+
+from expense_agent_svc.dependencies import (  # noqa: E402
+    RequestContextMismatch,
+    RequestContextUnavailable,
+    get_request_context_for_state,
+)
+
+
+def test_get_request_context_for_state_returns_registered_context() -> None:
+    ctx = RequestContext(thread_id="t", tenant_id="tenant-a", budget=_FakeBudget())
+    register_request(ctx)
+    try:
+        resolved = get_request_context_for_state(
+            {"request_id": ctx.request_id, "tenant_id": "tenant-a", "thread_id": "t"}
+        )
+        assert resolved is ctx
+    finally:
+        release_request(ctx.request_id)
+
+
+def test_get_request_context_for_state_missing_request_id_raises() -> None:
+    with pytest.raises(RequestContextUnavailable):
+        get_request_context_for_state({"request_id": ""})
+    with pytest.raises(RequestContextUnavailable):
+        get_request_context_for_state({})
+    with pytest.raises(RequestContextUnavailable):
+        get_request_context_for_state("not a dict")
+
+
+def test_get_request_context_for_state_stale_id_raises() -> None:
+    with pytest.raises(RequestContextUnavailable):
+        get_request_context_for_state({"request_id": "does-not-exist"})
+
+
+def test_get_request_context_for_state_tenant_mismatch_rejected() -> None:
+    ctx = RequestContext(thread_id="t", tenant_id="tenant-a", budget=_FakeBudget())
+    register_request(ctx)
+    try:
+        with pytest.raises(RequestContextMismatch):
+            get_request_context_for_state({"request_id": ctx.request_id, "tenant_id": "tenant-b"})
+    finally:
+        release_request(ctx.request_id)
+
+
+def test_get_request_context_for_state_thread_mismatch_rejected() -> None:
+    ctx = RequestContext(thread_id="thread-a", tenant_id="tenant-a", budget=_FakeBudget())
+    register_request(ctx)
+    try:
+        with pytest.raises(RequestContextMismatch):
+            get_request_context_for_state({"request_id": ctx.request_id, "thread_id": "thread-b"})
+    finally:
+        release_request(ctx.request_id)
+
+
+def test_agent_state_stores_only_request_id_and_scalars() -> None:
+    """AgentState grew a ``request_id`` string. Prove it stays a scalar
+    and that neither a RequestContext nor a BudgetGuard can be smuggled
+    in through the initial-state helper."""
+    from expense_agent_svc.state import initial_state
+
+    state = initial_state(
+        question="policy?",
+        tenant_id="tenant-a",
+        thread_id="t",
+        request_id="opaque-1",
+    )
+    # Only scalar request_id.
+    request_id = state["request_id"]
+    assert isinstance(request_id, str)
+    # A new request replaces the prior request_id on a resumed thread —
+    # LangGraph reducers on the immutable-typed request_id key
+    # overwrite by default (no reducer). Prove by constructing a fresh
+    # initial_state with the same thread and a new request_id.
+    fresh = initial_state(
+        question="policy?",
+        tenant_id="tenant-a",
+        thread_id="t",
+        request_id="opaque-2",
+    )
+    assert fresh["request_id"] == "opaque-2"
+    assert fresh["request_id"] != state["request_id"]

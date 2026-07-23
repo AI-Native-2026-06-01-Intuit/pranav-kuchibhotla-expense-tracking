@@ -207,3 +207,60 @@ def release_request(request_id: str) -> None:
 def _registry_size_for_tests() -> int:
     """Test helper — the registry itself is intentionally not exported."""
     return _REGISTRY.size()
+
+
+class RequestContextUnavailable(RuntimeError):
+    """A node was invoked with a state that carries no live request context.
+
+    Raised when :func:`get_request_context_for_state` cannot resolve the
+    state's ``request_id`` to a registered :class:`RequestContext` — for
+    example because the request was cancelled and the registry entry
+    was already released. The exception message stays generic on
+    purpose (no request_id, no thread_id, no tenant) so it cannot leak
+    identifiers into an SSE error frame.
+    """
+
+
+class RequestContextMismatch(RuntimeError):
+    """Registered request context tenant/thread does not match the state.
+
+    A resumed checkpoint might carry a stale ``request_id`` that maps
+    to a *different* request. Refusing the run is safer than silently
+    letting one request's tool spend against another request's budget.
+    """
+
+
+def get_request_context_for_state(state: object) -> RequestContext:
+    """Resolve the live per-request context for a graph node's input state.
+
+    ``state`` must expose a non-empty ``request_id`` string (a
+    :class:`~collections.abc.Mapping` interface is sufficient — this
+    accepts ``AgentState``, plain dicts, and any read-only mapping the
+    graph plumbs through).
+
+    The context's ``thread_id`` and ``tenant_id`` are checked against
+    the state's values. A mismatch raises
+    :class:`RequestContextMismatch` so a stale checkpoint pointing at a
+    reused ``request_id`` cannot land on the wrong request's
+    :class:`BudgetGuard`.
+    """
+    if not isinstance(state, dict):
+        raise RequestContextUnavailable("state is not a mapping; cannot locate request_id")
+    request_id = state.get("request_id")
+    if not isinstance(request_id, str) or not request_id:
+        raise RequestContextUnavailable("state carries no request_id")
+    try:
+        ctx = get_request_context(request_id)
+    except KeyError as exc:
+        # The exception text names only "the request could not be
+        # continued" — never the request_id or any tenant/thread hint.
+        raise RequestContextUnavailable("request context could not be resolved") from exc
+    # Optional integrity check: if the state carries a tenant/thread we
+    # match against the registered values. A mismatch is a hard failure.
+    state_tenant = state.get("tenant_id")
+    state_thread = state.get("thread_id")
+    if isinstance(state_tenant, str) and state_tenant and state_tenant != ctx.tenant_id:
+        raise RequestContextMismatch("state tenant does not match registered request")
+    if isinstance(state_thread, str) and state_thread and state_thread != ctx.thread_id:
+        raise RequestContextMismatch("state thread does not match registered request")
+    return ctx

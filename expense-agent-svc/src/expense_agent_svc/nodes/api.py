@@ -29,7 +29,7 @@ from ..dependencies import (
     AgentDependencies,
     BudgetGuardLike,
     MCPSessionLike,
-    get_request_context,
+    get_request_context_for_state,
 )
 from ._deadline import deadline
 
@@ -239,10 +239,7 @@ async def _api_agent_body(
     model_invoke: ModelInvoke,
     cost_recorder: CostRecorder = _default_cost_recorder,
 ) -> Mapping[str, object]:
-    request_id = state.get("request_id")
-    if not isinstance(request_id, str):
-        raise ValueError("state must carry a string 'request_id' for node dispatch")
-    request_ctx = get_request_context(request_id)
+    request_ctx = get_request_context_for_state(state)
     budget = request_ctx.budget
 
     catalogue = await _list_tool_catalogue(dependencies.mcp_session)
