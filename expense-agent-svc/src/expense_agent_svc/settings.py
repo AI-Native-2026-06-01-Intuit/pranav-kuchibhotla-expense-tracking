@@ -37,6 +37,26 @@ class Settings(BaseSettings):
         description="Postgres connection string for the durable checkpointer.",
     )
 
+    # --- Postgres (W7D3 pgvector store used by retrieve_and_generate) ---
+    # NOTE: the RAG vector DSN is *not* the checkpointer DSN — the
+    # local dev environment publishes pgvector at localhost:55432. The
+    # checkpointer runs at localhost:5432 for LangGraph state, and the
+    # two must never be conflated.
+    rag_postgres_url: str = Field(
+        default="postgresql://postgres:postgres@localhost:55432/postgres",
+        description="Postgres connection string for the W7D3 pgvector store.",
+    )
+
+    # --- Redis (W7D3 semantic cache) ---
+    redis_url: str = Field(
+        default="redis://localhost:6379/0",
+        description="Redis connection string for the W7D3 semantic cache.",
+    )
+
+    # --- RAG pool sizing ---
+    rag_pool_min_size: int = Field(default=1, ge=0)
+    rag_pool_max_size: int = Field(default=4, ge=1)
+
     # --- MCP transport (published by expense-mcp-server SSE) ---
     mcp_sse_url: str = Field(
         default="http://127.0.0.1:8080/sse",
@@ -96,11 +116,18 @@ class Settings(BaseSettings):
     # --- Local / CI ergonomics ---
     allow_external_eval_skip: bool = Field(default=False)
 
-    @field_validator("postgres_url")
+    @field_validator("postgres_url", "rag_postgres_url")
     @classmethod
     def _validate_postgres_url(cls, v: str) -> str:
         if not v.startswith(("postgresql://", "postgres://")):
-            raise ValueError("postgres_url must start with postgresql:// or postgres://")
+            raise ValueError("must start with postgresql:// or postgres://")
+        return v
+
+    @field_validator("redis_url")
+    @classmethod
+    def _validate_redis_url(cls, v: str) -> str:
+        if not v.startswith(("redis://", "rediss://")):
+            raise ValueError("redis_url must start with redis:// or rediss://")
         return v
 
     @field_validator("mcp_sse_url")

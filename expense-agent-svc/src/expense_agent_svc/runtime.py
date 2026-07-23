@@ -3,26 +3,20 @@
 The FastAPI lifespan (:mod:`expense_agent_svc.app`) constructs one
 :class:`AgentRuntime` per process. It carries every long-lived
 collaborator — Anthropic clients, the MCP session, the compiled
-LangGraph, the ``AsyncPostgresSaver`` — that would be wasteful (and
-often unsafe) to rebuild on every request.
+LangGraph, the ``AsyncPostgresSaver``, the pgvector pool, and the
+Redis client — that would be wasteful (and often unsafe) to rebuild
+on every request.
 
-Critically, this runtime *never* holds a :class:`~expense_agent_svc.
-budgets.BudgetGuard`. Budgets are per-request state (each request has
-its own ceiling, so sharing one guard would let one tenant starve
-another) and are created at the request boundary in Phase 15.
-
-Everything else lives here because it either:
-
-* holds a network transport that must be initialised and torn down
-  exactly once (``AsyncPostgresSaver``, ``ClientSession``), or
-* is expensive to construct (Anthropic HTTP client with pooled TCP
-  connections), or
-* would leak a secret at import time if constructed lazily (Anthropic
-  API key, MCP bearer JWT).
+Critically, this runtime *never* holds a
+:class:`~expense_agent_svc.budgets.BudgetGuard`. Budgets are
+per-request state; sharing one guard across requests would let one
+tenant deny another. The request boundary in ``app.py`` constructs
+one guard per request.
 """
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
@@ -38,7 +32,20 @@ if TYPE_CHECKING:
     from .state import AgentState
 
 
-# --- Public runtime ------------------------------------------------------------
+# --- Configuration errors ---------------------------------------------------
+
+
+class RuntimeConfigurationError(RuntimeError):
+    """Raised when a required runtime configuration is missing.
+
+    The message names the missing environment variable but *never*
+    prints its value (which would be a secret for the JWT case). This
+    is a startup-time failure — the pod goes to CrashLoopBackoff rather
+    than serve unauthenticated MCP traffic.
+    """
+
+
+# --- Public runtime ---------------------------------------------------------
 
 
 @dataclass(frozen=True)
@@ -60,23 +67,18 @@ class AgentRuntime:
     ready: dict[str, bool]
 
 
-# --- Factory contract ---------------------------------------------------------
+# --- Factory contract -------------------------------------------------------
 
 
 class RuntimeFactory(Protocol):
-    """Async context manager that yields an :class:`AgentRuntime`.
-
-    Enter to construct the process-scoped resources; exit to close
-    them. Tests inject a fake factory that skips all network I/O; the
-    default production factory lives in :func:`default_runtime_factory`.
-    """
+    """Async context manager that yields an :class:`AgentRuntime`."""
 
     def __call__(
         self, settings: Settings
     ) -> contextlib.AbstractAsyncContextManager[AgentRuntime]: ...
 
 
-# --- X-Agent header constants -------------------------------------------------
+# --- X-Agent header constants -----------------------------------------------
 
 
 X_AGENT_RETRIEVAL = "retrieval_agent"
@@ -85,16 +87,128 @@ X_AGENT_SYNTHESIS = "synthesis_agent"
 
 
 def anthropic_default_headers(role: str) -> dict[str, str]:
-    """Return the default headers each Anthropic client should send.
-
-    ``X-Agent`` is the audit-trail tag the platform side uses to
-    attribute spend to a specific worker inside a single request.
-    Keeping it as a small helper means the three per-role constants
-    stay in exactly one place.
-    """
+    """Return the default headers each Anthropic client should send."""
     if role not in {X_AGENT_RETRIEVAL, X_AGENT_API, X_AGENT_SYNTHESIS}:
         raise ValueError(f"unknown X-Agent role: {role!r}")
     return {"X-Agent": role}
+
+
+# --- Fail-closed configuration guardrails -----------------------------------
+
+
+def _require_mcp_configuration(settings: Settings) -> None:
+    """Fail-closed check before opening the MCP transport.
+
+    The W7D4 server verifies JWT signature + expiry + audience on
+    every SSE request. Starting the runtime without a bearer token
+    would produce an infinite loop of authentication rejections that
+    look like a network problem in the logs. Fail startup instead so
+    the misconfiguration is visible.
+
+    The exception message names the missing environment variable but
+    never its value.
+    """
+    if not settings.mcp_sse_url:
+        raise RuntimeConfigurationError(
+            "EXPENSE_AGENT_MCP_SSE_URL must be set to start the runtime"
+        )
+    bearer = settings.mcp_bearer_jwt.get_secret_value()
+    if not bearer:
+        raise RuntimeConfigurationError(
+            "EXPENSE_AGENT_MCP_BEARER_JWT must be set to start the runtime "
+            "(the W7D4 SSE middleware refuses unauthenticated requests)"
+        )
+
+
+# --- Real API-loop adapter ---------------------------------------------------
+
+
+def _translate_tools_for_anthropic(catalogue: list[dict[str, object]]) -> list[dict[str, object]]:
+    """Coerce our internal Anthropic tool-use schema to the SDK-safe shape."""
+    return [
+        {
+            "name": tool["name"],
+            "description": tool.get("description", ""),
+            "input_schema": tool["input_schema"],
+        }
+        for tool in catalogue
+    ]
+
+
+def make_anthropic_model_invoke(
+    *,
+    api_client: object,
+    model_name: str,
+    max_tokens: int = 1024,
+) -> Callable[[list[dict[str, object]], list[dict[str, object]]], Any]:
+    """Return an async ``model_invoke`` bound to the API-worker client.
+
+    The API node calls this on every tool-use iteration; the returned
+    coroutine issues ``messages.create(tools=..., messages=...)`` and
+    hands back the raw response so the node can read ``stop_reason``,
+    ``content``, and ``usage``. The API worker's ``X-Agent`` header
+    lives on ``api_client.default_headers`` so it rides along with every
+    request without any per-call plumbing.
+    """
+
+    async def invoke(
+        catalogue: list[dict[str, object]],
+        messages: list[dict[str, object]],
+    ) -> Any:
+        # ``api_client.messages.create`` returns an
+        # ``anthropic.types.Message`` whose ``.usage.input_tokens`` /
+        # ``.output_tokens`` are the source of truth for local cost
+        # accounting.
+        response = await cast(Any, api_client).messages.create(
+            model=model_name,
+            max_tokens=max_tokens,
+            tools=_translate_tools_for_anthropic(catalogue),
+            messages=messages,
+        )
+        return response
+
+    return invoke
+
+
+# --- Real retrieval adapter -------------------------------------------------
+
+
+def make_retrieval_callable(
+    *,
+    pool: object,
+    redis_client: object,
+    retrieval_anthropic: object,
+    settings: Settings,
+) -> Callable[[str, str], dict[str, object]]:
+    """Return a synchronous ``(query, tenant) -> dict`` adapter for W7D3.
+
+    W7D3 ``retrieve_and_generate`` is synchronous: the retrieval node
+    already wraps it in ``asyncio.to_thread``. This adapter grabs a
+    connection from the injected psycopg pool for each call and returns
+    the borrow to the pool afterwards, so a slow retrieval never
+    starves the whole pool.
+
+    The retrieval-worker's ``X-Agent: retrieval_agent`` header lives
+    on the injected ``retrieval_anthropic`` client, which W7D3 uses to
+    generate its answer text. Passing the async API-worker client into
+    W7D3 by mistake would ship the wrong header, so the two roles are
+    kept strictly separate.
+    """
+    from expense_ai.rag import retrieve_and_generate as _retrieve_and_generate
+
+    def _retrieve(query_text: str, tenant_id: str, /) -> dict[str, object]:
+        with cast(Any, pool).connection() as conn:
+            result: dict[str, object] = _retrieve_and_generate(
+                query_text,
+                tenant_id,
+                anthropic=retrieval_anthropic,
+                conn=conn,
+                r=redis_client,
+                model_name=settings.model_name,
+            )
+            return result
+
+    return _retrieve
 
 
 # --- Default production factory ----------------------------------------------
@@ -103,18 +217,7 @@ def anthropic_default_headers(role: str) -> dict[str, str]:
 def default_runtime_factory(
     settings: Settings,
 ) -> contextlib.AbstractAsyncContextManager[AgentRuntime]:
-    """Return the production runtime factory.
-
-    This function returns an async context manager (via
-    :func:`_default_runtime_context`) so callers can ``async with`` it
-    inside the FastAPI lifespan. All resource ownership lives inside
-    the enclosed :class:`~contextlib.AsyncExitStack` so a failed
-    startup unwinds every partially-initialised resource in reverse
-    order — no half-opened Postgres connection is left dangling.
-
-    Nothing in this function is invoked at module import; the
-    ``import expense_agent_svc.app`` guardrail test proves it.
-    """
+    """Return the production runtime factory."""
     return _default_runtime_context(settings)
 
 
@@ -126,22 +229,28 @@ async def _default_runtime_context(
 
     Order matters:
 
-    1. Postgres saver (durable checkpoints must be ready before we
-       compile the graph).
-    2. MCP transport + ``ClientSession`` (the API node needs the
-       session to discover tools at first request time).
-    3. Three Anthropic clients — one per worker, each with its
-       distinct ``X-Agent`` default header.
-    4. Instructor wrapper on the synthesis client only.
-    5. Compile the graph over the live saver.
+    1. Fail-closed configuration check for MCP.
+    2. Postgres saver (checkpointer must be ready before the graph
+       compiles).
+    3. pgvector connection pool + Redis client for W7D3 retrieval.
+    4. MCP transport + ``ClientSession``.
+    5. Three async Anthropic clients (retrieval / api / synthesis).
+    6. One *sync* Anthropic client for the W7D3 retrieval callable.
+    7. Instructor wrapper on the synthesis async client only.
+    8. Compile the graph over the live saver.
     """
+    # Fail-closed BEFORE opening any network resource.
+    _require_mcp_configuration(settings)
+
     # Late imports so ``import expense_agent_svc.app`` does not pull in
     # anthropic / mcp / langgraph-checkpoint-postgres at process import.
     import instructor as _instructor
-    from anthropic import AsyncAnthropic
+    import redis as _redis
+    from anthropic import Anthropic, AsyncAnthropic
     from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
     from mcp import ClientSession
     from mcp.client.sse import sse_client
+    from psycopg_pool import ConnectionPool
 
     from .graph import NodeSet, build_expense_agent_graph
     from .nodes.api import make_api_agent
@@ -150,6 +259,8 @@ async def _default_runtime_context(
 
     ready: dict[str, bool] = {
         "postgres_checkpointer": False,
+        "rag_pool": False,
+        "redis": False,
         "mcp_session": False,
         "graph": False,
     }
@@ -162,82 +273,93 @@ async def _default_runtime_context(
         await saver.setup()
         ready["postgres_checkpointer"] = True
 
-        # --- 2. MCP SSE transport + session ----------------------------
+        # --- 2. pgvector pool + Redis (owned by the exit stack) --------
+        # psycopg_pool.ConnectionPool.open() blocks briefly; we run it
+        # off the event loop so the lifespan does not stall.
+        pool = ConnectionPool(
+            settings.rag_postgres_url,
+            min_size=settings.rag_pool_min_size,
+            max_size=settings.rag_pool_max_size,
+            open=False,
+        )
+        await asyncio.to_thread(pool.open)
+        stack.callback(pool.close)
+        ready["rag_pool"] = True
+
+        redis_client = _redis.Redis.from_url(settings.redis_url)
+        stack.callback(redis_client.close)
+        ready["redis"] = True
+
+        # --- 3. MCP SSE transport + session ----------------------------
         bearer = settings.mcp_bearer_jwt.get_secret_value()
-        mcp_headers: dict[str, str] = {}
-        if bearer:
-            mcp_headers["Authorization"] = f"Bearer {bearer}"
+        mcp_headers = {"Authorization": f"Bearer {bearer}"}
         read_stream, write_stream, *_ = await stack.enter_async_context(
-            sse_client(settings.mcp_sse_url, headers=mcp_headers or None)
+            sse_client(settings.mcp_sse_url, headers=mcp_headers)
         )
         session = await stack.enter_async_context(ClientSession(read_stream, write_stream))
         await session.initialize()
         ready["mcp_session"] = True
 
-        # --- 3. Anthropic clients per worker ---------------------------
+        # --- 4. Anthropic clients per worker ---------------------------
         api_key_value = settings.anthropic_api_key.get_secret_value() or None
         base_url = settings.anthropic_base_url or None
 
-        def _client(role: str) -> AsyncAnthropic:
+        def _async_client(role: str) -> AsyncAnthropic:
             return AsyncAnthropic(
                 api_key=api_key_value,
                 base_url=base_url,
                 default_headers=anthropic_default_headers(role),
             )
 
-        retrieval_client = _client(X_AGENT_RETRIEVAL)
-        api_client = _client(X_AGENT_API)
-        synthesis_raw = _client(X_AGENT_SYNTHESIS)
-        # AsyncAnthropic has an ``aclose`` on its underlying HTTPX
-        # client; register cleanup so a shutdown unwinds them.
+        retrieval_client = _async_client(X_AGENT_RETRIEVAL)
+        api_client = _async_client(X_AGENT_API)
+        synthesis_raw = _async_client(X_AGENT_SYNTHESIS)
         stack.push_async_callback(retrieval_client.close)
         stack.push_async_callback(api_client.close)
         stack.push_async_callback(synthesis_raw.close)
 
-        # --- 4. Instructor wrapper on the synthesis client only --------
+        # --- 5. Sync retrieval client (W7D3 is synchronous) -----------
+        # W7D3's `retrieve_and_generate` accepts a synchronous
+        # Anthropic client; passing an async one would silently
+        # break W7D3 inside asyncio.to_thread. This synchronous
+        # client is the retrieval worker's mouthpiece and rides
+        # the same X-Agent header.
+        retrieval_sync_client = Anthropic(
+            api_key=api_key_value,
+            base_url=base_url,
+            default_headers=anthropic_default_headers(X_AGENT_RETRIEVAL),
+        )
+        stack.callback(retrieval_sync_client.close)
+
+        # --- 6. Instructor wrapper on synthesis only ------------------
         synthesis_client = _instructor.from_anthropic(synthesis_raw)
 
-        # --- 5. Retrieval callable adapter over W7D3 -------------------
-        # Import the real W7D3 entrypoint lazily so it is not required
-        # at process import (this keeps ``import expense_agent_svc.app``
-        # hermetic for tests).
-        from expense_ai.rag import retrieve_and_generate as _retrieve_and_generate
+        # --- 7. Retrieval callable ------------------------------------
+        retrieve = make_retrieval_callable(
+            pool=pool,
+            redis_client=redis_client,
+            retrieval_anthropic=retrieval_sync_client,
+            settings=settings,
+        )
 
-        def _retrieve(query_text: str, tenant_id: str, /) -> dict[str, object]:
-            # W7D3 expects a persistent psycopg connection and a redis
-            # client — the FastAPI lifespan will populate these in
-            # Phase 15 alongside the SSE bridge. Keeping the adapter
-            # thin here so Phase 15 owns the pgvector + Redis
-            # connections in the same lifespan.
-            raise NotImplementedError(
-                "retrieval adapter is wired in Phase 15 alongside the SSE bridge; "
-                "unit tests should inject a stub retrieve callable."
-            )
-
-        # Silence the unused-warning until Phase 15 lands.
-        _ = _retrieve_and_generate
-
-        # The real ``ClientSession`` satisfies :class:`MCPSessionLike`
-        # structurally, but mypy sees ``list_tools`` returning the
-        # concrete ``ListToolsResult`` (a subtype of ``object``) as a
-        # variance conflict. Cast at the boundary rather than widening
-        # the Protocol return type to ``ListToolsResult`` — the
-        # Protocol stays testable with in-memory fakes that return
-        # arbitrary listing shapes.
         dependencies = AgentDependencies(
             settings=settings,
             mcp_session=cast(Any, session),
             anthropic=api_client,
             instructor=synthesis_client,
-            retrieve=_retrieve,
+            retrieve=retrieve,
         )
 
-        # --- 6. Compile the graph over the live saver ------------------
+        # --- 8. Compile the graph over the live saver ------------------
+        api_model_invoke = make_anthropic_model_invoke(
+            api_client=api_client,
+            model_name=settings.model_name,
+        )
         node_set = NodeSet(
             retrieval_agent=make_retrieval_agent(dependencies),
             api_agent=make_api_agent(
                 dependencies,
-                model_invoke=_unwired_model_invoke,
+                model_invoke=api_model_invoke,
             ),
             synthesis_agent=make_synthesis_agent(dependencies),
         )
@@ -257,21 +379,6 @@ async def _default_runtime_context(
     # required here.
 
 
-async def _unwired_model_invoke(
-    catalogue: list[dict[str, object]],
-    messages: list[dict[str, object]],
-) -> Any:
-    """Placeholder API-loop model invoker.
-
-    The real Anthropic tool-loop is wired in Phase 15 (once the SSE
-    bridge exists to stream partial tool-use back to the client). This
-    stub is here so ``build_expense_agent_graph`` in the default
-    runtime can compile without a mid-lifecycle NoneType.
-    """
-    del catalogue, messages
-    raise NotImplementedError("model_invoke is wired in Phase 15 alongside the SSE bridge")
-
-
 # --- Small helper for tests --------------------------------------------------
 
 
@@ -283,7 +390,10 @@ __all__ = [
     "X_AGENT_SYNTHESIS",
     "AgentRuntime",
     "FakeRuntimeFactory",
+    "RuntimeConfigurationError",
     "RuntimeFactory",
     "anthropic_default_headers",
     "default_runtime_factory",
+    "make_anthropic_model_invoke",
+    "make_retrieval_callable",
 ]

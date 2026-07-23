@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import contextlib
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
@@ -125,15 +126,19 @@ def test_instructor_wraps_only_the_synthesis_client() -> None:
 
 
 def test_no_shared_budget_guard_in_lifespan() -> None:
-    for text in (_runtime_source(), _app_source()):
-        # A BudgetGuard *construction* is the anti-pattern; type
-        # annotations mentioning the class are fine.
-        import re
+    """The runtime module must not construct a shared BudgetGuard.
 
-        assert not re.search(r"\bBudgetGuard\s*\(", text), (
-            "runtime/app must not build a BudgetGuard — per-request budgets "
-            "are constructed at the request boundary in Phase 15."
-        )
+    ``app.py`` legally constructs one per request inside the chat
+    handler (asserted separately in tests/test_app.py). The runtime is
+    process-scoped; a BudgetGuard construction here would leak spend
+    across tenants.
+    """
+    import re
+
+    assert not re.search(r"\bBudgetGuard\s*\(", _runtime_source()), (
+        "runtime.py must not build a BudgetGuard — per-request budgets are "
+        "constructed by the /v1/chat/stream route handler."
+    )
 
 
 def test_no_module_import_of_heavy_clients() -> None:
@@ -166,3 +171,201 @@ def test_secrets_never_logged() -> None:
         assert occurrences <= 2, (
             f"{pattern} appears {occurrences} times — verify none reach a logger"
         )
+
+
+# ---------- Fail-closed MCP configuration ----------
+
+
+from pydantic import SecretStr  # noqa: E402 -- test-time import used below
+
+from expense_agent_svc.runtime import (  # noqa: E402
+    RuntimeConfigurationError,
+    make_anthropic_model_invoke,
+    make_retrieval_callable,
+)
+
+
+def test_require_mcp_configuration_rejects_empty_bearer() -> None:
+    """Startup must fail closed before opening any MCP transport."""
+    from expense_agent_svc.runtime import _require_mcp_configuration
+
+    settings = Settings(mcp_bearer_jwt=SecretStr(""))
+    with pytest.raises(RuntimeConfigurationError) as exc_info:
+        _require_mcp_configuration(settings)
+    text = str(exc_info.value)
+    # The exception message names the env var but not its value.
+    assert "EXPENSE_AGENT_MCP_BEARER_JWT" in text
+
+
+def test_require_mcp_configuration_never_prints_the_token() -> None:
+    """A supplied token must never appear in the exception path.
+
+    We construct a Settings whose token is present so the guardrail
+    does NOT raise, then re-verify by monkey-patching the URL empty so
+    it DOES raise, and assert the token value never appears in the
+    resulting error message.
+    """
+    from expense_agent_svc.runtime import _require_mcp_configuration
+
+    settings_ok = Settings(
+        mcp_bearer_jwt=SecretStr("plain.jwt.value"),
+        mcp_sse_url="http://mcp/sse",
+    )
+    # With both configured, no error.
+    _require_mcp_configuration(settings_ok)
+
+    # Settings validation already blocks an empty mcp_sse_url at
+    # construction; exercise the empty-URL branch on a hand-crafted
+    # stand-in that skips validation. The stand-in still carries a
+    # plaintext token so we can prove no get_secret_value() output
+    # leaks into the exception.
+    class _Stub:
+        mcp_sse_url = ""
+        mcp_bearer_jwt = SecretStr("plain.jwt.value")
+
+    with pytest.raises(RuntimeConfigurationError) as exc_info:
+        _require_mcp_configuration(cast(Settings, _Stub()))
+    assert "plain.jwt.value" not in str(exc_info.value)
+
+
+# ---------- Real API model_invoke adapter ----------
+
+
+@pytest.mark.asyncio
+async def test_make_anthropic_model_invoke_calls_messages_create_with_translated_tools() -> None:
+    calls: list[dict[str, Any]] = []
+
+    class _FakeMessages:
+        async def create(self, **kwargs: Any) -> Any:
+            calls.append(kwargs)
+
+            class _Usage:
+                input_tokens = 100
+                output_tokens = 50
+
+            class _R:
+                stop_reason = "end_turn"
+
+                def __init__(self) -> None:
+                    self.content: list[Any] = []
+                    self.usage = _Usage()
+
+            return _R()
+
+    class _FakeClient:
+        def __init__(self) -> None:
+            self.messages = _FakeMessages()
+
+    invoke = make_anthropic_model_invoke(
+        api_client=_FakeClient(),
+        model_name="claude-fake",
+        max_tokens=32,
+    )
+    response = await invoke(
+        [
+            {
+                "name": "orders.get_order",
+                "description": "d",
+                "input_schema": {"type": "object"},
+            }
+        ],
+        [{"role": "user", "content": "hi"}],
+    )
+    assert calls
+    kwargs = calls[0]
+    assert kwargs["model"] == "claude-fake"
+    assert kwargs["max_tokens"] == 32
+    tools = kwargs["tools"]
+    assert tools == [
+        {
+            "name": "orders.get_order",
+            "description": "d",
+            "input_schema": {"type": "object"},
+        }
+    ]
+    assert response.usage.input_tokens == 100
+
+
+# ---------- Real retrieval callable adapter ----------
+
+
+def test_make_retrieval_callable_acquires_pool_connection_per_call() -> None:
+    """Each call must acquire (and release) one connection from the pool."""
+
+    acquired: list[str] = []
+    released: list[str] = []
+
+    class _FakeConn:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        def __enter__(self) -> _FakeConn:
+            acquired.append(self.name)
+            return self
+
+        def __exit__(self, *_a: object) -> None:
+            released.append(self.name)
+
+    class _FakePool:
+        def __init__(self) -> None:
+            self._counter = 0
+
+        def connection(self) -> _FakeConn:
+            self._counter += 1
+            return _FakeConn(f"conn-{self._counter}")
+
+    def _fake_retrieve_and_generate(
+        query_text: str,
+        tenant_id: str,
+        *,
+        anthropic: Any,
+        conn: Any,
+        r: Any,
+        model_name: str,
+    ) -> dict[str, object]:
+        del anthropic, r, model_name
+        assert isinstance(conn, _FakeConn)
+        return {"answer": f"{query_text}|{tenant_id}", "citations": []}
+
+    # Monkey-patch expense_ai.rag.retrieve_and_generate for this test.
+    import expense_ai.rag as _rag
+
+    original = _rag.retrieve_and_generate
+    _rag.retrieve_and_generate = _fake_retrieve_and_generate
+    try:
+        settings = Settings()
+        retrieve = make_retrieval_callable(
+            pool=_FakePool(),
+            redis_client=object(),
+            retrieval_anthropic=object(),
+            settings=settings,
+        )
+        r1 = retrieve("policy?", "tenant-a")
+        r2 = retrieve("order?", "tenant-b")
+    finally:
+        _rag.retrieve_and_generate = original
+
+    assert r1["answer"] == "policy?|tenant-a"
+    assert r2["answer"] == "order?|tenant-b"
+    assert len(acquired) == 2
+    assert acquired == released, "every acquired connection must be released"
+
+
+# ---------- Source: rag pool + redis are owned by the AsyncExitStack ----------
+
+
+def test_runtime_owns_rag_pool_and_redis_via_exit_stack() -> None:
+    text = _runtime_source()
+    assert "ConnectionPool" in text, "runtime.py must import ConnectionPool"
+    assert "stack.callback(pool.close)" in text, "pool.close must be registered on stack"
+    assert "stack.callback(redis_client.close)" in text, (
+        "redis client close must be registered on stack"
+    )
+
+
+def test_runtime_wires_real_api_model_invoke_not_the_phase14_stub() -> None:
+    text = _runtime_source()
+    assert "make_anthropic_model_invoke" in text
+    assert "_unwired_model_invoke" not in text, "Phase 15 must replace the Phase 14 placeholder"
+    assert "make_retrieval_callable" in text, "the production retrieval callable must be wired"
+    assert "_require_mcp_configuration" in text, "the fail-closed MCP check must run at startup"

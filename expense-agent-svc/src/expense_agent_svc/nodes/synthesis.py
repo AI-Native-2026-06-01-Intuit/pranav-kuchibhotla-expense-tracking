@@ -17,13 +17,13 @@ from __future__ import annotations
 
 import json
 from collections.abc import Awaitable, Callable, Mapping
-from typing import Protocol
+from typing import Any, Protocol
 
 from langsmith import traceable
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..budgets import BudgetExceeded
-from ..dependencies import AgentDependencies, get_request_context
+from ..dependencies import AgentDependencies, get_request_context_for_state
 from ._deadline import deadline
 
 SYNTHESIS_DEADLINE_SECONDS = 8.0
@@ -158,17 +158,26 @@ def _default_cost_recorder(budget: object, final: FinalAnswer) -> int:
     return 0
 
 
+# Optional async factory: when the injected Instructor client exposes
+# ``messages.create_with_completion`` we use it so we can capture the
+# raw Anthropic completion's ``usage`` and feed real integer token
+# counts into ``BudgetGuard.record_usage``. When the fake client under
+# test only exposes ``create``, we fall back to the original path.
+UsageAwareSynthesizer = Callable[
+    [Any, str, str, str, int],
+    Awaitable[tuple[FinalAnswer, int]],
+]
+
+
 async def _synthesis_body(
     state: Mapping[str, object],
     *,
     dependencies: AgentDependencies,
     cost_recorder: CostRecorder = _default_cost_recorder,
     to_thread: Callable[..., Awaitable[FinalAnswer]] | None = None,
+    synthesizer: UsageAwareSynthesizer | None = None,
 ) -> Mapping[str, object]:
-    request_id = state.get("request_id")
-    if not isinstance(request_id, str):
-        raise ValueError("state must carry a string 'request_id' for node dispatch")
-    ctx = get_request_context(request_id)
+    ctx = get_request_context_for_state(state)
 
     docs_raw = state.get("docs") or []
     docs: list[dict[str, object]] = list(docs_raw) if isinstance(docs_raw, list) else []
@@ -207,26 +216,44 @@ async def _synthesis_body(
         tool_results=tool_results,
     )
 
-    # Instructor's ``messages.create`` is synchronous. Wrap it so we do
-    # not block the event loop; tests inject a direct runner.
+    # Two paths:
+    #
+    # * Production wires ``synthesizer`` (see :func:`make_synthesis_agent`
+    #   in Phase 15) to Instructor's async
+    #   ``messages.create_with_completion``. That path returns the
+    #   parsed :class:`FinalAnswer` **and** the raw Anthropic completion
+    #   so we can pull real ``usage`` and hand integer token counts to
+    #   :class:`BudgetGuard.record_usage`.
+    # * Tests inject a synchronous fake through the legacy
+    #   ``client.messages.create`` path plus a ``cost_recorder`` hook.
     client = dependencies.instructor
     if not hasattr(client, "messages"):
         raise TypeError("dependencies.instructor lacks a 'messages' attribute")
 
-    def _invoke() -> FinalAnswer:
-        response: FinalAnswer = client.messages.create(  # type: ignore[attr-defined]
-            response_model=FinalAnswer,
-            max_retries=2,
-            model=dependencies.settings.model_name,
-            messages=[{"role": "user", "content": prompt}],
+    if synthesizer is not None:
+        final, delta_cost = await synthesizer(
+            ctx.budget,
+            prompt,
+            dependencies.settings.model_name,
+            "user",
+            2,  # max_retries — kept explicit at the call site
         )
-        return response
+    else:
 
-    import asyncio as _asyncio
+        def _invoke() -> FinalAnswer:
+            response: FinalAnswer = client.messages.create(  # type: ignore[attr-defined]
+                response_model=FinalAnswer,
+                max_retries=2,
+                model=dependencies.settings.model_name,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            return response
 
-    runner = to_thread if to_thread is not None else _asyncio.to_thread
-    final: FinalAnswer = await runner(_invoke)
-    delta_cost = cost_recorder(ctx.budget, final)
+        import asyncio as _asyncio
+
+        runner = to_thread if to_thread is not None else _asyncio.to_thread
+        final = await runner(_invoke)
+        delta_cost = cost_recorder(ctx.budget, final)
 
     return {
         "answer": final.text,
@@ -237,19 +264,111 @@ async def _synthesis_body(
     }
 
 
+def _make_default_synthesizer(
+    input_rate_usd_e5_per_million: int,
+    output_rate_usd_e5_per_million: int,
+) -> UsageAwareSynthesizer:
+    """Return a production synthesizer that captures real Instructor usage.
+
+    The bound closure calls the async ``AsyncInstructor.messages.
+    create_with_completion`` API — the SDK returns
+    ``(parsed_model, raw_completion)`` so we can pull real
+    ``raw_completion.usage.input_tokens`` and ``.output_tokens`` and
+    feed them into :meth:`BudgetGuard.record_usage`. Missing usage
+    counts as zero cost (we never invent tokens).
+    """
+
+    async def synthesizer(
+        client: Any,
+        prompt: str,
+        model_name: str,
+        role: str,
+        max_retries: int,
+    ) -> tuple[FinalAnswer, int]:
+        del role
+        parsed, raw = await client.messages.create_with_completion(
+            model=model_name,
+            max_tokens=1024,
+            messages=[{"role": "user", "content": prompt}],
+            response_model=FinalAnswer,
+            max_retries=max_retries,
+        )
+        usage = getattr(raw, "usage", None)
+        if usage is None:
+            return parsed, 0
+        input_tokens = int(getattr(usage, "input_tokens", 0) or 0)
+        output_tokens = int(getattr(usage, "output_tokens", 0) or 0)
+        # ``client`` here is the injected budget (see how
+        # ``_synthesis_body`` forwards ``ctx.budget`` as the first arg
+        # to the synthesizer). The awkward reuse of the parameter
+        # ``client`` keeps the Callable signature narrow.
+        return parsed, (
+            input_tokens * input_rate_usd_e5_per_million // 1_000_000
+            + output_tokens * output_rate_usd_e5_per_million // 1_000_000
+        )
+
+    return synthesizer
+
+
 def make_synthesis_agent(
     dependencies: AgentDependencies,
     *,
     cost_recorder: CostRecorder = _default_cost_recorder,
+    synthesizer: UsageAwareSynthesizer | None = None,
 ) -> Callable[[Mapping[str, object]], Awaitable[Mapping[str, object]]]:
-    """Return the deadline-wrapped async synthesis node."""
+    """Return the deadline-wrapped async synthesis node.
+
+    ``synthesizer`` — when injected, replaces the fake-friendly
+    ``client.messages.create`` path. Production wires it via
+    :func:`_make_default_synthesizer` so real usage is recorded on the
+    request's ``BudgetGuard``.
+    """
+    if synthesizer is None:
+        # Only enable the production synthesizer when the injected
+        # instructor client actually exposes ``create_with_completion``
+        # — the test fakes do not, and we do not want to force them to.
+        maybe_messages = getattr(dependencies.instructor, "messages", None)
+        if maybe_messages is not None and hasattr(maybe_messages, "create_with_completion"):
+            synthesizer = _bind_default_synthesizer(dependencies)
 
     @deadline(seconds=SYNTHESIS_DEADLINE_SECONDS, sentinel=_TIMEOUT_SENTINEL)
     @traceable(name="synthesis_agent", project_name="expense-agent-svc-dev")
     async def synthesis_agent(state: Mapping[str, object]) -> Mapping[str, object]:
-        return await _synthesis_body(state, dependencies=dependencies, cost_recorder=cost_recorder)
+        return await _synthesis_body(
+            state,
+            dependencies=dependencies,
+            cost_recorder=cost_recorder,
+            synthesizer=synthesizer,
+        )
 
     return synthesis_agent
+
+
+def _bind_default_synthesizer(
+    dependencies: AgentDependencies,
+) -> UsageAwareSynthesizer:
+    """Bind the production synthesizer to the injected Instructor client."""
+    base = _make_default_synthesizer(
+        dependencies.settings.input_rate_usd_e5_per_million,
+        dependencies.settings.output_rate_usd_e5_per_million,
+    )
+    client = dependencies.instructor
+
+    async def _bound(
+        budget: Any,
+        prompt: str,
+        model_name: str,
+        role: str,
+        max_retries: int,
+    ) -> tuple[FinalAnswer, int]:
+        parsed, cost = await base(client, prompt, model_name, role, max_retries)
+        # Record the real usage on the per-request BudgetGuard; the
+        # base helper returned the integer cost already.
+        if cost:
+            budget.add_cost(cost)
+        return parsed, cost
+
+    return _bound
 
 
 async def synthesis_body_for_tests(
@@ -258,12 +377,14 @@ async def synthesis_body_for_tests(
     dependencies: AgentDependencies,
     cost_recorder: CostRecorder = _default_cost_recorder,
     to_thread: Callable[..., Awaitable[FinalAnswer]] | None = None,
+    synthesizer: UsageAwareSynthesizer | None = None,
 ) -> Mapping[str, object]:
     return await _synthesis_body(
         state,
         dependencies=dependencies,
         cost_recorder=cost_recorder,
         to_thread=to_thread,
+        synthesizer=synthesizer,
     )
 
 

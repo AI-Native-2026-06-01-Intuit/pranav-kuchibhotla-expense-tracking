@@ -26,7 +26,7 @@ from ..budgets import BudgetExceeded
 from ..dependencies import (
     AgentDependencies,
     RetrievalCallable,
-    get_request_context,
+    get_request_context_for_state,
 )
 from ._deadline import deadline
 
@@ -52,9 +52,17 @@ _ID_PATTERNS = (
 )
 
 
-# Rewriter injection point: production wires this to an Anthropic
-# ``messages.create`` call; tests inject a deterministic fake.
+# Rewriter injection point.
+#
+# * ``QueryRewriter``: returns just the rewritten string. Used by the
+#   deterministic-fake tests that do not need cost accounting.
+# * ``QueryRewriterWithUsage``: returns ``(rewrite_text, cost_delta_usd_e5)``.
+#   Production wires this to an Anthropic ``messages.create`` call whose
+#   real ``usage.input_tokens`` / ``output_tokens`` are converted to
+#   integer cost via ``BudgetGuard.record_usage``. The retrieval node
+#   accepts either shape and picks the one available.
 QueryRewriter = Callable[[str], Awaitable[str]]
+QueryRewriterWithUsage = Callable[[str], Awaitable[tuple[str, int]]]
 
 
 async def _identity_rewriter(question: str) -> str:
@@ -121,30 +129,38 @@ async def _retrieval_body(
     *,
     dependencies: AgentDependencies,
     rewriter: QueryRewriter = _identity_rewriter,
+    rewriter_with_usage: QueryRewriterWithUsage | None = None,
     to_thread: Callable[..., Awaitable[object]] | None = None,
 ) -> Mapping[str, object]:
-    request_id = state.get("request_id")
-    if not isinstance(request_id, str):
-        raise ValueError("state must carry a string 'request_id' for node dispatch")
-    ctx = get_request_context(request_id)
+    ctx = get_request_context_for_state(state)
 
     original = str(state.get("question", ""))
     tenant_id = str(state.get("tenant_id", ctx.tenant_id))
 
-    # Query rewrite (bounded, identifier-preserving).
+    delta_cost = 0
+
+    # Query rewrite (bounded, identifier-preserving). Prefer the
+    # usage-aware rewriter when the runtime injected one; only that
+    # rewriter can attribute cost to the request's BudgetGuard.
     try:
         ctx.budget.check_or_raise()
-        rewritten = await rewriter(original)
+        if rewriter_with_usage is not None:
+            rewritten, rewrite_cost = await rewriter_with_usage(original)
+            delta_cost += rewrite_cost
+        else:
+            rewritten = await rewriter(original)
     except BudgetExceeded:
         return {
             "docs": [],
-            "cost_usd_e5": 0,
+            "cost_usd_e5": delta_cost,
             "visited_nodes": ["retrieval_agent"],
             "errors": ["budget_exceeded"],
         }
     query = _pick_rewrite(original, rewritten)
 
     # Delegate to W7D3 retrieval (synchronous, so run on a worker thread).
+    # The W7D3 inner generation call is billed by llm-proxy / CloudWatch
+    # — we do not double-count it here.
     runner = to_thread if to_thread is not None else asyncio.to_thread
     retriever: RetrievalCallable = dependencies.retrieve
     try:
@@ -152,7 +168,7 @@ async def _retrieval_body(
     except Exception as exc:
         return {
             "docs": [],
-            "cost_usd_e5": 0,
+            "cost_usd_e5": delta_cost,
             "visited_nodes": ["retrieval_agent"],
             "errors": [f"retrieval_error:{type(exc).__name__}"],
         }
@@ -160,7 +176,7 @@ async def _retrieval_body(
     if not isinstance(payload, Mapping):
         return {
             "docs": [],
-            "cost_usd_e5": 0,
+            "cost_usd_e5": delta_cost,
             "visited_nodes": ["retrieval_agent"],
             "errors": ["retrieval_bad_payload"],
         }
@@ -168,7 +184,7 @@ async def _retrieval_body(
     docs = _adapt_docs(payload)
     return {
         "docs": docs,
-        "cost_usd_e5": 0,
+        "cost_usd_e5": delta_cost,
         "visited_nodes": ["retrieval_agent"],
         "errors": [],
     }
@@ -178,13 +194,19 @@ def make_retrieval_agent(
     dependencies: AgentDependencies,
     *,
     rewriter: QueryRewriter = _identity_rewriter,
+    rewriter_with_usage: QueryRewriterWithUsage | None = None,
 ) -> Callable[[Mapping[str, object]], Awaitable[Mapping[str, object]]]:
     """Return the deadline-wrapped async retrieval node."""
 
     @deadline(seconds=RETRIEVAL_DEADLINE_SECONDS, sentinel=_TIMEOUT_SENTINEL)
     @traceable(name="retrieval_agent", project_name="expense-agent-svc-dev")
     async def retrieval_agent(state: Mapping[str, object]) -> Mapping[str, object]:
-        return await _retrieval_body(state, dependencies=dependencies, rewriter=rewriter)
+        return await _retrieval_body(
+            state,
+            dependencies=dependencies,
+            rewriter=rewriter,
+            rewriter_with_usage=rewriter_with_usage,
+        )
 
     return retrieval_agent
 
@@ -194,10 +216,15 @@ async def retrieval_body_for_tests(
     *,
     dependencies: AgentDependencies,
     rewriter: QueryRewriter = _identity_rewriter,
+    rewriter_with_usage: QueryRewriterWithUsage | None = None,
     to_thread: Callable[..., Awaitable[object]] | None = None,
 ) -> Mapping[str, object]:
     return await _retrieval_body(
-        state, dependencies=dependencies, rewriter=rewriter, to_thread=to_thread
+        state,
+        dependencies=dependencies,
+        rewriter=rewriter,
+        rewriter_with_usage=rewriter_with_usage,
+        to_thread=to_thread,
     )
 
 

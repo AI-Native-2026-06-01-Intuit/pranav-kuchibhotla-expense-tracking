@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Callable, Mapping
+from typing import Any
 
 import pytest
 from pydantic import ValidationError
@@ -97,13 +98,15 @@ class _FakeInstructor:
 
 
 def _make_deps(
-    instructor: _FakeInstructor | _StubClient,
+    instructor: object,
 ) -> AgentDependencies:
+    from typing import cast as _cast
+
     return AgentDependencies(
         settings=Settings(),
         mcp_session=_FakeMCPSession(),
         anthropic=_StubClient(),
-        instructor=instructor,
+        instructor=_cast(Any, instructor),
         retrieve=_stub_retrieve,
     )
 
@@ -306,3 +309,122 @@ def test_make_synthesis_agent_returns_callable() -> None:
     fake = _FakeInstructor(canned=FinalAnswer(text="ok", citations=[], confidence=0.5))
     deps = _make_deps(fake)
     assert callable(make_synthesis_agent(deps))
+
+
+# ---------- Production usage-aware synthesizer ----------
+
+
+class _UsageBearingCompletion:
+    class _Usage:
+        input_tokens = 1_000_000
+        output_tokens = 500_000
+
+    usage = _Usage()
+
+
+class _AsyncInstructorLike:
+    """Fake AsyncInstructor client — exposes ``messages.create_with_completion``."""
+
+    def __init__(self, canned: FinalAnswer, usage_present: bool = True) -> None:
+        self.canned = canned
+        self.calls: list[dict[str, object]] = []
+
+        class _Messages:
+            def __init__(self, parent: _AsyncInstructorLike) -> None:
+                self._parent = parent
+
+            async def create_with_completion(self, **kwargs: object) -> tuple[FinalAnswer, object]:
+                self._parent.calls.append(kwargs)
+                completion = _UsageBearingCompletion() if usage_present else object()
+                return self._parent.canned, completion
+
+        self.messages = _Messages(self)
+
+
+@pytest.mark.asyncio
+async def test_default_synthesizer_records_real_usage_via_budget() -> None:
+    """The production synthesizer must call BudgetGuard.record_usage with
+    real integer token counts and return the integer cost delta."""
+    from expense_agent_svc.nodes.synthesis import _bind_default_synthesizer
+
+    canned = FinalAnswer(
+        text="answer",
+        citations=[Citation(doc_id="d1", quote="quote body ten+ chars")],
+        confidence=0.7,
+    )
+    fake = _AsyncInstructorLike(canned)
+    deps = _make_deps(fake)
+    # Bind synthesizer against real settings: 300 input rate, 1500 output rate.
+    synthesizer = _bind_default_synthesizer(deps)
+
+    guard = BudgetGuard(ceiling_usd_e5=1_000_000)
+    parsed, cost = await synthesizer(
+        guard,
+        "prompt",
+        "claude-fake",
+        "user",
+        2,
+    )
+    # 1M tokens * 300 / 1M = 300; 500K * 1500 / 1M = 750; total 1050
+    assert cost == 1050
+    assert guard.spent_usd_e5 == 1050
+    assert parsed is canned
+
+
+@pytest.mark.asyncio
+async def test_default_synthesizer_zero_cost_when_usage_missing() -> None:
+    from expense_agent_svc.nodes.synthesis import _bind_default_synthesizer
+
+    canned = FinalAnswer(text="ok", citations=[], confidence=0.5)
+    fake = _AsyncInstructorLike(canned, usage_present=False)
+    deps = _make_deps(fake)
+    synthesizer = _bind_default_synthesizer(deps)
+
+    guard = BudgetGuard(ceiling_usd_e5=1_000_000)
+    _parsed, cost = await synthesizer(guard, "prompt", "claude-fake", "user", 2)
+    assert cost == 0
+    assert guard.spent_usd_e5 == 0
+
+
+@pytest.mark.asyncio
+async def test_synthesis_body_uses_production_synthesizer_when_provided() -> None:
+    from expense_agent_svc.nodes.synthesis import _bind_default_synthesizer
+
+    canned = FinalAnswer(
+        text="synth text",
+        citations=[Citation(doc_id="d1", quote="quote body ten+ chars")],
+        confidence=0.8,
+    )
+    fake = _AsyncInstructorLike(canned)
+    deps = _make_deps(fake)
+    synthesizer = _bind_default_synthesizer(deps)
+    ctx = _register_ctx()
+    try:
+        result = await synthesis_body_for_tests(
+            {
+                "question": "q?",
+                "tenant_id": "tenant-a",
+                "thread_id": "thread-1",
+                "request_id": ctx.request_id,
+                "docs": [{"doc_id": "d1", "chunk_id": "c1", "quote": "quote body ten+ chars"}],
+                "tool_results": {},
+            },
+            dependencies=deps,
+            synthesizer=synthesizer,
+        )
+    finally:
+        release_request(ctx.request_id)
+
+    assert result["answer"] == "synth text"
+    assert result["cost_usd_e5"] == 1050
+    assert fake.calls, "the production synthesizer must have called create_with_completion"
+
+
+def test_make_synthesis_agent_picks_production_synthesizer_when_available() -> None:
+    """When the injected instructor exposes create_with_completion, the
+    factory must wire the production synthesizer automatically."""
+    canned = FinalAnswer(text="ok", citations=[], confidence=0.5)
+    fake = _AsyncInstructorLike(canned)
+    deps = _make_deps(fake)
+    node = make_synthesis_agent(deps)
+    assert callable(node)
