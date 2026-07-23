@@ -222,17 +222,98 @@ def test_cloudformation_validate_template_present() -> None:
 
 def test_no_argo_apply_from_ci() -> None:
     text = _text()
+    # The manifest gate must not depend on `kubectl apply` in any form
+    # (including --dry-run=client, which still triggers server discovery
+    # in newer kubectl versions and would fail without a reachable API
+    # server). All Kubernetes schema validation now runs through
+    # kubeconform against the Kustomize-rendered manifest file.
     for forbidden in ("argocd app sync", "argocd app create", "kubectl apply"):
-        # kubectl apply --dry-run=client is allowed in deploy-static;
-        # accept that specific form only.
-        if forbidden == "kubectl apply":
-            # Non-dry-run kubectl apply is forbidden.
-            for match in re.finditer(r"kubectl apply(?! --dry-run)", text):
-                fail_at = match.start()
-                snippet = text[max(0, fail_at - 40) : fail_at + 60]
-                raise AssertionError(f"real kubectl apply found in CI: {snippet!r}")
-        else:
-            assert forbidden not in text
+        assert forbidden not in text, f"forbidden command still referenced: {forbidden!r}"
+
+
+# ---------- Kubernetes manifest validation via kubeconform -------------
+
+
+def test_manifest_gate_uses_kubeconform() -> None:
+    text = _text()
+    assert "kubeconform" in text, "deploy-static job must run kubeconform"
+
+
+def test_kubeconform_version_is_pinned() -> None:
+    text = _text()
+    # An exact version pin, not a floating tag / branch.
+    match = re.search(r'KUBECONFORM_VERSION:\s*"([0-9]+\.[0-9]+\.[0-9]+)"', text)
+    assert match is not None, "KUBECONFORM_VERSION must be pinned to an exact semver"
+    # The pinned version must be consumed by the download URL via the
+    # env var (no hardcoded floating alternative).
+    assert (
+        "kubeconform/releases/download/v${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz"
+        in text
+    ), "kubeconform download URL must reference the pinned KUBECONFORM_VERSION env var"
+    # And no floating "latest" release URL exists as a fallback.
+    assert "kubeconform/releases/latest" not in text
+
+
+def test_kubeconform_checksum_is_verified_before_execution() -> None:
+    text = _text()
+    # Pinned checksum literal (64 hex chars) is present and consumed by
+    # sha256sum -c before extraction/execution.
+    match = re.search(r'KUBECONFORM_SHA256:\s*"([0-9a-f]{64})"', text)
+    assert match is not None, "KUBECONFORM_SHA256 must be a full 64-char SHA-256 literal"
+    assert "sha256sum -c" in text, (
+        "downloaded kubeconform archive must be verified with sha256sum -c"
+    )
+    # The verification step must reference the pinned checksum variable.
+    assert "${KUBECONFORM_SHA256}" in text
+
+
+def test_kubeconform_uses_kustomize_rendered_manifest() -> None:
+    text = _text()
+    # Kustomize render still writes the same file that kubeconform reads.
+    assert "kustomize build expense-agent-svc/gitops/overlays/prod" in text
+    assert "/tmp/expense-agent-svc-prod.yaml" in text
+    # kubeconform is invoked against exactly that rendered file.
+    assert re.search(
+        r"kubeconform[\s\S]*?/tmp/expense-agent-svc-prod\.yaml",
+        text,
+    ), "kubeconform must validate the Kustomize-rendered manifest file"
+
+
+def test_kubeconform_invocation_has_strict_and_summary() -> None:
+    text = _text()
+    assert "-strict" in text
+    assert "-summary" in text
+
+
+def test_kubeconform_ignores_missing_crd_schemas_explicitly() -> None:
+    text = _text()
+    # Argo CRDs and other custom schemas may not ship with kubeconform;
+    # this flag must be present and the choice must be documented.
+    assert "-ignore-missing-schemas" in text
+
+
+def test_manifest_gate_does_not_require_live_api_server() -> None:
+    text = _text()
+    # Guardrails: nothing in the manifest gate touches a real cluster or
+    # obtains cluster credentials. kubectl is no longer installed and
+    # `kubectl apply` is gone entirely (see test_no_argo_apply_from_ci).
+    for forbidden in (
+        "kubectl apply",
+        "kubectl version",
+        "kubectl cluster-info",
+        "aws eks update-kubeconfig",
+        "argocd login",
+        "argocd app sync",
+    ):
+        assert forbidden not in text, f"live-cluster command still referenced: {forbidden!r}"
+
+
+def test_manifest_gate_does_not_use_unpinned_action_or_container() -> None:
+    text = _text()
+    # No community kubeconform action, and no floating container tag.
+    assert "yannh/kubeconform-action" not in text
+    assert "ghcr.io/yannh/kubeconform" not in text
+    assert "kubeconform:latest" not in text
 
 
 def test_no_secret_literals_in_workflow() -> None:

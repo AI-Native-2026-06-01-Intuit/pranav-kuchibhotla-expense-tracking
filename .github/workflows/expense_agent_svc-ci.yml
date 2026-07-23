@@ -179,15 +179,25 @@ jobs:
 
   # -----------------------------------------------------------------
   # Deployment static validation: parse Argo Application YAML, render
-  # Kustomize, kubectl client dry-run, static CFN template parse.
-  # AWS-authenticated validate-template runs in the aws-validate job
-  # below only when the OIDC role variable is configured.
+  # Kustomize, validate the rendered manifests with kubeconform (no
+  # cluster, no kubeconfig, no kubectl discovery). Static CFN template
+  # parsing lives in test_deployment_artifacts.py; AWS-authenticated
+  # validate-template runs in the aws-validate job below only when the
+  # OIDC role variable is configured.
   # -----------------------------------------------------------------
   deploy-static:
     name: deployment artifacts static validation
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     needs: quality
+    env:
+      KUSTOMIZE_VERSION: "5.4.3"
+      # kubeconform is pinned to an exact version; the linux-amd64 archive
+      # digest below is taken from the upstream CHECKSUMS file published
+      # with the v0.6.7 release and is verified before executing the
+      # binary. Never use a floating tag or an unpinned action.
+      KUBECONFORM_VERSION: "0.6.7"
+      KUBECONFORM_SHA256: "95f14e87aa28c09d5941f11bd024c1d02fdc0303ccaa23f61cef67bc92619d73"
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -198,26 +208,45 @@ jobs:
           version: "0.4.18"
           python-version: "3.12"
 
-      - name: Install kustomize + kubectl
+      - name: Install kustomize (pinned)
         run: |
           set -euo pipefail
           curl -sSL -o /tmp/kustomize.tar.gz \
-            https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv5.4.3/kustomize_v5.4.3_linux_amd64.tar.gz
+            "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv${KUSTOMIZE_VERSION}/kustomize_v${KUSTOMIZE_VERSION}_linux_amd64.tar.gz"
           tar -xzf /tmp/kustomize.tar.gz -C /usr/local/bin kustomize
-          curl -sSL -o /usr/local/bin/kubectl \
-            https://dl.k8s.io/release/v1.30.4/bin/linux/amd64/kubectl
-          chmod +x /usr/local/bin/kubectl
           kustomize version
-          kubectl version --client=true
+
+      - name: Install kubeconform (pinned + SHA-256 verified)
+        run: |
+          set -euo pipefail
+          archive="/tmp/kubeconform-linux-amd64.tar.gz"
+          curl -fsSL -o "${archive}" \
+            "https://github.com/yannh/kubeconform/releases/download/v${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz"
+          # Verify the downloaded archive against the pinned SHA-256
+          # BEFORE extracting or executing anything from it.
+          echo "${KUBECONFORM_SHA256}  ${archive}" | sha256sum -c -
+          tar -xzf "${archive}" -C /usr/local/bin kubeconform
+          chmod +x /usr/local/bin/kubeconform
+          kubeconform -v
 
       - name: Kustomize render (prod overlay)
         run: |
           kustomize build expense-agent-svc/gitops/overlays/prod \
             > /tmp/expense-agent-svc-prod.yaml
 
-      - name: kubectl client dry-run
+      - name: kubeconform validate rendered manifests
+        # No kubeconfig, no cluster, no kubectl discovery, no AWS/Argo
+        # credentials. `-ignore-missing-schemas` is required because the
+        # rendered manifest may include CRDs whose schema is not shipped
+        # with kubeconform; the committed structural tests in
+        # tests/test_deployment_artifacts.py assert the Argo Application
+        # shape independently.
         run: |
-          kubectl apply --dry-run=client -f /tmp/expense-agent-svc-prod.yaml
+          kubeconform \
+            -strict \
+            -summary \
+            -ignore-missing-schemas \
+            /tmp/expense-agent-svc-prod.yaml
 
       - name: Resolve agent-svc dev deps for deployment tests
         working-directory: expense-agent-svc

@@ -300,7 +300,7 @@ repo `git status --porcelain` empty at test time.
 
 ### CI workflow proof
 
-`tests/test_ci_workflow.py` (19 tests): workflow name matches; PR +
+`tests/test_ci_workflow.py`: workflow name matches; PR +
 main triggers with path filters; every `uses:` reference is a
 40-char SHA (no `@vN`, no `@main`); Postgres 16 service present;
 `uv sync --frozen`; ruff + `ruff format --check`; strict mypy on
@@ -313,8 +313,30 @@ excluded); external gate with `--external`; frontend
 `bump-config` needs `build-and-push`; merge job restricted to main
 push; `id-token: write` on AWS jobs; `aws cloudformation
 validate-template`; no `cloudformation deploy` / `create-stack` /
-`update-stack` / `argocd app sync` / `argocd app create` / non-dry-run
-`kubectl apply` / secret literals.
+`update-stack` / `argocd app sync` / `argocd app create` /
+`kubectl apply` (any form) / secret literals.
+
+The manifest CI gate uses **kubeconform** — pinned to an exact
+version, downloaded archive verified against a committed SHA-256
+digest before execution, invoked with `-strict -summary
+-ignore-missing-schemas` against the Kustomize-rendered
+`/tmp/expense-agent-svc-prod.yaml`. No kubeconfig, no cluster, no
+`kubectl` discovery, no AWS or Argo credentials are required. The
+Argo `Application` schema is deliberately not shipped with
+kubeconform; its shape is asserted by the committed structural
+tests in `tests/test_deployment_artifacts.py` (apiVersion
+`argoproj.io/v1alpha1`, kind `Application`, destination namespace
+`expense-svc`, `automated.prune=true`, `automated.selfHeal=true`).
+Additional guardrails (`test_manifest_gate_uses_kubeconform`,
+`test_kubeconform_version_is_pinned`,
+`test_kubeconform_checksum_is_verified_before_execution`,
+`test_kubeconform_uses_kustomize_rendered_manifest`,
+`test_kubeconform_invocation_has_strict_and_summary`,
+`test_kubeconform_ignores_missing_crd_schemas_explicitly`,
+`test_manifest_gate_does_not_require_live_api_server`,
+`test_manifest_gate_does_not_use_unpinned_action_or_container`)
+prove the pinning, the checksum verification, the flag set, and
+the absence of any live-API-server dependency.
 
 ## Final observed results
 
@@ -364,9 +386,22 @@ validate-template`; no `cloudformation deploy` / `create-stack` /
 - Port **8080** exposed
 - HEALTHCHECK present
 
-### Kustomize render + kubectl client dry-run
-- `kustomize build expense-agent-svc/gitops/overlays/prod` **succeeded**
-- `kubectl apply --dry-run=client` **succeeded** (ConfigMap, Secret, Service, Deployment)
+### Kustomize render + kubeconform static validation
+- `kustomize build expense-agent-svc/gitops/overlays/prod > /tmp/expense-agent-svc-prod.yaml` **succeeded**
+- Pinned kubeconform (`v0.6.7`, archive SHA-256
+  `95f14e87aa28c09d5941f11bd024c1d02fdc0303ccaa23f61cef67bc92619d73`
+  on linux-amd64;
+  `cbb47d938a8d18eb5f79cb33663b2cecdee0c8ac0bf562ebcfca903df5f0802f`
+  on darwin-arm64 for local runs) verified against the committed
+  digest before execution.
+- `kubeconform -strict -summary -ignore-missing-schemas
+  /tmp/expense-agent-svc-prod.yaml` **succeeded** locally
+  (ConfigMap, Secret, Service, Deployment).
+- No cluster discovery, no kubeconfig, no `kubectl apply`, no AWS
+  credentials, no Argo login required. No Argo deployment or
+  Synced/Healthy result is claimed here — the Argo Application
+  itself is validated by the committed structural tests in
+  `tests/test_deployment_artifacts.py`.
 
 ### CloudFormation
 - `aws cloudformation validate-template --template-body file://expense-agent-svc/cfn/agent-svc-budget.yaml --profile uptimecrew --region us-east-1` **succeeded**
