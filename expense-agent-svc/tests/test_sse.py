@@ -141,9 +141,12 @@ async def test_synthesis_text_delta_emitted_on_channel_zero() -> None:
     assert channels == ["0", "0", "2"]
     assert decoded[0][1] == "Hello "
     assert decoded[1][1] == "world"
-    # Channel 2 payload validates against FinalAnswer.
-    assert isinstance(decoded[2][1], dict)
-    payload = decoded[2][1]
+    # AI SDK v4 channel-2 carries a JSON array; unwrap the single
+    # FinalAnswer element.
+    payload_list = decoded[2][1]
+    assert isinstance(payload_list, list) and len(payload_list) == 1
+    payload = payload_list[0]
+    assert isinstance(payload, dict)
     assert payload["text"] == "final policy answer"
     assert payload["citations"] == []
 
@@ -231,8 +234,9 @@ async def test_graph_recursion_error_maps_to_recursion_limit_frame() -> None:
     assert frames == [error_frame_for("recursion_limit")]
     channel, payload = _decode(frames[0])
     assert channel == "3"
-    assert isinstance(payload, dict)
-    assert payload["error"] == "recursion_limit"
+    # AI SDK v4 channel-3 carries a JSON string; the client resolves
+    # the safe human message from the shared code catalogue.
+    assert payload == "recursion_limit"
 
 
 @pytest.mark.asyncio
@@ -247,8 +251,7 @@ async def test_budget_exceeded_maps_to_budget_frame() -> None:
     )
     channel, payload = _decode(frames[0])
     assert channel == "3"
-    assert isinstance(payload, dict)
-    assert payload["error"] == "budget_exceeded"
+    assert payload == "budget_exceeded"
     # The raw exception string ("boom") must not appear in the frame.
     assert b"boom" not in frames[0]
 
@@ -265,8 +268,7 @@ async def test_request_context_unavailable_maps_to_safe_frame() -> None:
     )
     channel, payload = _decode(frames[0])
     assert channel == "3"
-    assert isinstance(payload, dict)
-    assert payload["error"] == "request_context_unavailable"
+    assert payload == "request_context_unavailable"
 
 
 @pytest.mark.asyncio
@@ -281,8 +283,7 @@ async def test_context_mismatch_maps_to_safe_frame() -> None:
     )
     channel, payload = _decode(frames[0])
     assert channel == "3"
-    assert isinstance(payload, dict)
-    assert payload["error"] == "request_context_unavailable"
+    assert payload == "request_context_unavailable"
 
 
 @pytest.mark.asyncio
@@ -299,8 +300,7 @@ async def test_unexpected_error_maps_to_internal_error_without_leaking_secrets()
     )
     channel, payload = _decode(frames[0])
     assert channel == "3"
-    assert isinstance(payload, dict)
-    assert payload["error"] == "internal_error"
+    assert payload == "internal_error"
     for leak in ("secretpwd", "sk-ant-XYZ", "eyJhaZ.jwt", "RuntimeError"):
         assert leak.encode() not in frames[0]
 
@@ -479,8 +479,11 @@ async def test_synthesis_end_without_final_answer_uses_answer_fallback() -> None
     decoded = [_decode(f) for f in frames]
     channels = [c for c, _ in decoded]
     assert channels == ["0", "2"]
-    # The channel-2 payload was normalised through FinalAnswer.
-    payload = decoded[-1][1]
+    # The channel-2 payload is a one-element array; the wrapped
+    # FinalAnswer was normalised.
+    payload_list = decoded[-1][1]
+    assert isinstance(payload_list, list) and len(payload_list) == 1
+    payload = payload_list[0]
     assert isinstance(payload, dict)
     assert payload["text"] == "just an answer string"
 
@@ -525,7 +528,9 @@ async def test_malformed_final_answer_is_normalised_safely() -> None:
             thread_id="thread-1",
         )
     )
-    payload = _decode(frames[-1])[1]
+    payload_list = _decode(frames[-1])[1]
+    assert isinstance(payload_list, list) and len(payload_list) == 1
+    payload = payload_list[0]
     assert isinstance(payload, dict)
     assert payload["text"] == "half-broken answer"
     conf = payload["confidence"]
@@ -537,5 +542,4 @@ def test_error_frame_for_unknown_code_falls_back_to_internal_error() -> None:
     frame = error_frame_for("nope-not-a-real-code")
     channel, payload = _decode(frame)
     assert channel == "3"
-    assert isinstance(payload, dict)
-    assert payload["error"] == "internal_error"
+    assert payload == "internal_error"

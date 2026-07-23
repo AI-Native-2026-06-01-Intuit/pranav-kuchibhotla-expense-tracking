@@ -52,13 +52,28 @@ def _text_frame(delta: str) -> bytes:
 
 
 def _final_frame(payload: Mapping[str, object]) -> bytes:
-    """Return a channel-2 (typed final answer) AI SDK v4 frame."""
-    return (f"2:{json.dumps(payload, ensure_ascii=False)}\n").encode()
+    """Return a channel-2 (typed final answer) AI SDK v4 frame.
+
+    The v4 wire grammar requires channel-2 to carry a JSON *array* of
+    data values (see ``@ai-sdk/ui-utils`` dataStreamPart parser). We
+    wrap the single :class:`FinalAnswer` payload in a one-element
+    array; the client picks it out of ``useChat.data``.
+    """
+    return (f"2:{json.dumps([payload], ensure_ascii=False)}\n").encode()
 
 
 def _error_frame(code: str, message: str) -> bytes:
-    """Return a channel-3 (safe error) AI SDK v4 frame."""
-    return (f"3:{json.dumps({'error': code, 'message': message}, ensure_ascii=False)}\n").encode()
+    """Return a channel-3 (safe error) AI SDK v4 frame.
+
+    Channel-3 in the v4 wire grammar carries a JSON *string*. We
+    encode the error code so the client's ``useChat.error.message`` is
+    a stable machine-readable slug — the friendly text is looked up in
+    the client's :data:`SAFE_ERROR_MESSAGES` catalogue. This is also
+    how we prove no exception repr / DSN / token can leak into the
+    channel: the frame carries only the code string, never a message.
+    """
+    del message
+    return (f"3:{json.dumps(code, ensure_ascii=False)}\n").encode()
 
 
 # --- Safe error catalogue -----------------------------------------------------
